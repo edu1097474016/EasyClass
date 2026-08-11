@@ -11,7 +11,7 @@
 #   · 不使用 emoji，全部为纯文本
 # ==========================================================================
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QFrame,
@@ -88,6 +88,12 @@ class AdminWindow(QMainWindow):
         self.weather.failed.connect(self._on_weather_failed)
         self._apply_style()
 
+        # 天气状态实时刷新（3 秒），显示最新缓存与更新时间
+        self._status_timer = QTimer(self)
+        self._status_timer.setInterval(3000)
+        self._status_timer.timeout.connect(self._refresh_weather_live)
+        self._status_timer.start()
+
     # ==================================================================
     #  侧边栏
     # ==================================================================
@@ -144,8 +150,16 @@ class AdminWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         if index == 0:
             self._refresh_dashboard()
+        elif index == 3:
+            self._update_weather_status()
         elif index == 4:
             self._update_schedule_preview()
+
+    def _refresh_weather_live(self):
+        """定时刷新天气状态与首页概览，保证文字实时更新。"""
+        self._update_weather_status()
+        if self.stack.currentIndex() == 0:
+            self._refresh_dashboard()
 
     def _scroll_page(self, builder):
         scroll = QScrollArea()
@@ -359,8 +373,7 @@ class AdminWindow(QMainWindow):
         self.opacity_slider.setValue(int(float(self.config.get("opacity", 0.65)) * 100))
         self._opacity_value = QLabel()
         self._opacity_value.setProperty("class", "setting-hint")
-        self.opacity_slider.valueChanged.connect(
-            lambda v: self._opacity_value.setText("%d%%" % v))
+        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         self._opacity_value.setText("%d%%" % self.opacity_slider.value())
         row = QHBoxLayout()
         row.addWidget(self._opacity_value)
@@ -369,6 +382,12 @@ class AdminWindow(QMainWindow):
         cl.addWidget(self.opacity_slider)
 
         layout.addWidget(self._save_btn(self._save_appearance))
+
+    def _on_opacity_changed(self, value):
+        """透明度滑块实时预览：拖动即时生效。"""
+        self._opacity_value.setText("%d%%" % value)
+        if self.island is not None:
+            self.island.set_window_opacity(value / 100.0)
 
     def _sync_theme_controls(self):
         if not hasattr(self, "theme_switch"):
@@ -424,8 +443,7 @@ class AdminWindow(QMainWindow):
             int(float(self.config.get("island_width_ratio", 0.85)) * 100))
         self._width_value = QLabel()
         self._width_value.setProperty("class", "setting-hint")
-        self.width_slider.valueChanged.connect(
-            lambda v: self._width_value.setText("%d%%" % v))
+        self.width_slider.valueChanged.connect(self._on_width_changed)
         self._width_value.setText("%d%%" % self.width_slider.value())
         row = QHBoxLayout()
         row.addWidget(self._width_value)
@@ -467,6 +485,12 @@ class AdminWindow(QMainWindow):
         self._row(cl, "目标屏幕", self.screen_combo, "灵动岛显示在所选屏幕顶部")
 
         layout.addWidget(self._save_btn(self._save_island))
+
+    def _on_width_changed(self, value):
+        """灵动岛宽度滑块实时预览：拖动即时生效。"""
+        self._width_value.setText("%d%%" % value)
+        if self.island is not None:
+            self.island.set_width_ratio(value / 100.0)
 
     def _on_fullscreen_toggled(self, checked):
         if self.island is not None:
@@ -592,6 +616,7 @@ class AdminWindow(QMainWindow):
             lines.append("湿度 %s%% · 风向 %s %s级 · 气压 %shPa" % (
                 cache.get("humidity", "--"), cache.get("wind_dir", "--"),
                 cache.get("wind_scale", "--"), cache.get("pressure", "--")))
+            lines.append("更新时间：%s" % cache.get("time", "--"))
             indices = cache.get("indices") or []
             if indices:
                 parts = []

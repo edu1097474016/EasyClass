@@ -60,6 +60,7 @@ def main():
     app.setApplicationVersion(utils.APP_VERSION)
     app.setQuitOnLastWindowClosed(False)   # 无窗口时保持托盘运行
     app.setStyle("Fusion")                 # 保证 QSS 在跨平台一致渲染
+    utils.install_button_press_animation(app)   # 按钮按下滑动动画
 
     # ---------- 5. 主题管理 ----------
     theme = ThemeManager(app, config)

@@ -17,12 +17,13 @@ import shutil
 import ctypes
 
 from PySide6.QtCore import (
-    Qt, QRect, QObject, Signal, Property,
+    Qt, QRect, QPoint, QObject, QEvent, Signal, Property,
     QAbstractNativeEventFilter, QPropertyAnimation, QEasingCurve,
 )
 from PySide6.QtGui import QGuiApplication, QFont, QColor, QPainter
 from PySide6.QtWidgets import (
-    QApplication, QAbstractButton, QGraphicsDropShadowEffect, QGraphicsBlurEffect,
+    QApplication, QAbstractButton, QPushButton,
+    QGraphicsDropShadowEffect, QGraphicsBlurEffect,
 )
 
 # ---------------- 应用元信息 ----------------
@@ -434,3 +435,54 @@ class ToggleSwitch(QAbstractButton):
         painter.setBrush(QColor("#FFFFFF"))
         painter.drawEllipse(x, int(s(2)), knob_d, knob_d)
         painter.end()
+
+
+# ==========================================================================
+#  按钮按下滑动动画（全局）
+# ==========================================================================
+
+class _ButtonPressFilter(QObject):
+    """全局事件过滤器：为所有 QPushButton 添加按下/松开滑动动画。"""
+
+    def __init__(self, offset=2, duration=90, parent=None):
+        super().__init__(parent)
+        self._offset = offset
+        self._duration = duration
+        self._press = {}   # id(button) -> 按下前基准位置
+
+    def _animate(self, btn, base_pos, dy):
+        anim = QPropertyAnimation(btn, b"pos", btn)
+        anim.setDuration(self._duration)
+        anim.setEasingCurve(QEasingCurve.Type.OutQuad)
+        anim.setStartValue(btn.pos())
+        anim.setEndValue(base_pos + QPoint(0, dy))
+        anim.start()
+        btn._press_anim = anim   # 持有引用防止被回收
+
+    def eventFilter(self, obj, event):
+        if isinstance(obj, QPushButton):
+            etype = event.type()
+            if etype == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._press[id(obj)] = obj.pos()
+                self._animate(obj, obj.pos(), self._offset)
+            elif etype == QEvent.MouseButtonRelease and id(obj) in self._press:
+                base = self._press.pop(id(obj))
+                self._animate(obj, base, 0)
+            elif etype == QEvent.MouseButtonDblClick and id(obj) not in self._press:
+                self._press[id(obj)] = obj.pos()
+                self._animate(obj, obj.pos(), self._offset)
+        return False
+
+
+def install_button_press_animation(app, offset=2, duration=90):
+    """为应用内所有 QPushButton 安装按下滑动动画。
+
+    按下时按钮内容下沉 offset 像素，松开/移出时弹回（OutQuad 非线性）。
+    """
+    filt = _ButtonPressFilter(offset=offset, duration=duration)
+    app.installEventFilter(filt)
+    # 挂在 app 上持有引用，防止事件过滤器被垃圾回收
+    if not hasattr(app, "_button_press_filters"):
+        app._button_press_filters = []
+    app._button_press_filters.append(filt)
+    return filt
