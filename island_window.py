@@ -11,6 +11,7 @@
 #   · 屏幕热插拔 / 分辨率 / DPI 变更自动重新适配（多显示器独立适配）
 # ==========================================================================
 
+import math
 from datetime import datetime, date
 
 from PySide6.QtCore import (
@@ -149,6 +150,66 @@ class CoursePanel(QFrame):
         color = QColor(primary)
         color.setAlpha(int(40 + 160 * self._glow))
         utils.paint_round_rect(painter, self.rect(), s(8), color, width=2)
+        painter.end()
+
+
+class FlipCard(QWidget):
+    """翻牌器：前后两张牌面，绕竖直中轴翻转（宽向缩放 + 牌面切换）。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._front = QPixmap()
+        self._back = QPixmap()
+        self._flip = 0.0
+        self._on_done = None
+        self._anim = QPropertyAnimation(self, b"flip", self)
+        self._anim.setDuration(420)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutCubic)   # 非线性缓动
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.finished.connect(self._finish)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.hide()
+
+    _f = Property(float, lambda self: self._flip,
+                  lambda self, v: self._set_flip(v))
+
+    def _set_flip(self, value):
+        self._flip = value
+        self.update()
+
+    def set_pages(self, front, back):
+        """设置正面/背面牌面。"""
+        self._front = front
+        self._back = back
+        self._flip = 0.0
+        self.update()
+
+    def flip(self, on_done=None):
+        """开始翻转，结束后回调。"""
+        self._on_done = on_done
+        self._flip = 0.0
+        self._anim.start()
+
+    def _finish(self):
+        done = self._on_done
+        self._on_done = None
+        if done:
+            done()
+
+    def paintEvent(self, event):
+        if self._front.isNull() and self._back.isNull():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        scale = abs(math.cos(math.pi * self._flip))   # 0.5 时收缩为一条线，此时换牌面
+        pix = self._front if self._flip < 0.5 else self._back
+        if pix.isNull():
+            painter.end()
+            return
+        w = max(1, int(self.width() * scale))
+        x = (self.width() - w) // 2
+        painter.drawPixmap(x, 0, w, self.height(), pix)
         painter.end()
 
 
@@ -488,6 +549,9 @@ class IslandWindow(QWidget):
         self.right_stack.setCurrentIndex(0)
         content.addWidget(self.right_stack)
 
+        # 翻牌器浮层：覆盖在右侧上方，播放翻转动画
+        self.flip_card = FlipCard(self.content_widget)
+
     def _show_weather(self):
         self._right_show_weather = True
         self.right_stack.setCurrentIndex(0)
@@ -510,14 +574,40 @@ class IslandWindow(QWidget):
         self._update_warning_elide()
 
     def _rotate_right(self):
-        """右侧信息轮播：有预警时在 天气/AQI 与 预警 之间轮流显示。"""
+        """右侧信息轮播：天气/AQI 与 预警 以翻牌效果轮流显示。"""
+        current = self.right_stack.currentIndex()
         if self._warnings:
-            if self._right_show_weather:
-                self._show_warning()
-            else:
-                self._show_weather()
+            target = 1 if current == 0 else 0
         else:
-            self._show_weather()
+            target = 0
+        if target != current:
+            self._flip_to(target)
+        else:
+            self._right_show_weather = (target == 0)
+
+    def _flip_to(self, index):
+        """翻牌切换到 index 页（0=天气 1=预警）。"""
+        if not hasattr(self, "flip_card"):
+            self.right_stack.setCurrentIndex(index)
+            self._right_show_weather = (index == 0)
+            return
+        front = self.right_stack.currentWidget().grab()
+        back = self.right_stack.widget(index).grab()
+        self.flip_card.set_pages(front, back)
+        self.flip_card.setGeometry(self.right_stack.geometry())
+        self.flip_card.raise_()
+        self.flip_card.show()
+
+        def on_done():
+            self.right_stack.setCurrentIndex(index)
+            self._right_show_weather = (index == 0)
+            self.flip_card.hide()
+            if index == 0:
+                self._update_weather_fit()
+            else:
+                self._update_warning_elide()
+
+        self.flip_card.flip(on_done)
 
     def _update_warning_elide(self, avail=0):
         if not hasattr(self, "warning_badge") or not self.warning_badge.isVisible():
