@@ -9,7 +9,9 @@
   "opacity": 0.65,
   "password": "admin123",
   "api_provider": "hefeng",
-  "island_width_ratio": 0.85,
+  "island_width_ratio": 1.0,
+  "island_glass_style": "auto",
+  "island_glass_custom": "#1E202D",
   "theme": "dark",
   "theme_color": "#40916C",
   "hover_hide": true

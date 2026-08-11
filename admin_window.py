@@ -440,9 +440,9 @@ class AdminWindow(QMainWindow):
 
         cl = self._card(layout, "宽度比例")
         self.width_slider = QSlider(Qt.Horizontal)
-        self.width_slider.setRange(50, 95)
+        self.width_slider.setRange(50, 100)
         self.width_slider.setValue(
-            int(float(self.config.get("island_width_ratio", 0.85)) * 100))
+            int(round(float(self.config.get("island_width_ratio", 1.0)) * 100)))
         self._width_value = QLabel()
         self._width_value.setProperty("class", "setting-hint")
         self.width_slider.valueChanged.connect(self._on_width_changed)
@@ -452,6 +452,24 @@ class AdminWindow(QMainWindow):
         row.addStretch(1)
         cl.addLayout(row)
         cl.addWidget(self.width_slider)
+
+        cl = self._card(layout, "毛玻璃样式")
+        self.glass_combo = QComboBox()
+        self.glass_combo.addItem("跟随主题", "auto")
+        self.glass_combo.addItem("深色毛玻璃", "dark")
+        self.glass_combo.addItem("浅色毛玻璃", "light")
+        self.glass_combo.addItem("自定义颜色", "custom")
+        style = self.config.get("island_glass_style", "auto")
+        idx = self.glass_combo.findData(style)
+        self.glass_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.glass_combo.currentIndexChanged.connect(self._on_glass_style_changed)
+        self._row(cl, "毛玻璃样式", self.glass_combo,
+                  "auto 跟随深浅主题，也可固定深浅或自定义颜色")
+
+        self.glass_color_btn = QPushButton("选择颜色")
+        self.glass_color_btn.clicked.connect(self._pick_glass_color)
+        self.glass_color_btn.setVisible(style == "custom")
+        cl.addWidget(self.glass_color_btn)
 
         cl = self._card(layout, "显示模式")
         self.fullscreen_switch = ToggleSwitch()
@@ -509,6 +527,32 @@ class AdminWindow(QMainWindow):
         self.hover_switch.blockSignals(True)
         self.hover_switch.set_checked_animated(self.island.hover_hide_enabled())
         self.hover_switch.blockSignals(False)
+        if hasattr(self, "glass_combo"):
+            style = self.island.glass_style()
+            idx = self.glass_combo.findData(style)
+            self.glass_combo.blockSignals(True)
+            self.glass_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.glass_combo.blockSignals(False)
+            self.glass_color_btn.setVisible(style == "custom")
+
+    def _on_glass_style_changed(self, index):
+        style = self.glass_combo.itemData(index)
+        self.config["island_glass_style"] = style
+        self.glass_color_btn.setVisible(style == "custom")
+        if self.island is not None:
+            self.island.set_glass_style(style, self.config.get("island_glass_custom", ""))
+        utils.save_config(self.config)
+
+    def _pick_glass_color(self):
+        color = QColorDialog.getColor(
+            QColor(self.config.get("island_glass_custom", "#1E202D") or "#1E202D"),
+            self, "自定义毛玻璃颜色")
+        if color.isValid():
+            self.config["island_glass_custom"] = color.name().upper()
+            if self.island is not None:
+                self.island.set_glass_style("custom", color.name().upper())
+            utils.save_config(self.config)
+            show_toast("毛玻璃颜色已应用")
 
     def _on_fullscreen_toggled(self, checked):
         if self.island is not None:

@@ -179,7 +179,9 @@ def load_config():
         "opacity": 0.65,
         "password": "admin123",
         "api_provider": "hefeng",
-        "island_width_ratio": 0.85,
+        "island_width_ratio": 1.0,
+        "island_glass_style": "auto",
+        "island_glass_custom": "#1E202D",
         "theme": "dark",
         "theme_color": "#40916C",
         "hover_hide": True,
@@ -388,10 +390,11 @@ class ToggleSwitch(QAbstractButton):
         self.update()
 
     def _animate_toggle(self, checked):
-        anim = QPropertyAnimation(self, b"_p")
+        anim = QPropertyAnimation(self, b"_p", self)
         anim.setDuration(180)
         anim.setEndValue(1.0 if checked else 0.0)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._knob_anim = anim   # 持有引用，防止动画对象被垃圾回收导致滑块不动
         anim.start()
 
     def set_checked_animated(self, checked):

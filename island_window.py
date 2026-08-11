@@ -300,7 +300,7 @@ class IslandWindow(QWidget):
     HIDE_WEATHER_WIDTH = 560   # 宽度小于该值（逻辑像素）时隐藏天气
     HIDE_COURSE_WIDTH = 320    # 极端窄屏再隐藏课程
     HOVER_HIDE_MARGIN = 60     # 鼠标靠近灵动岛多少像素内自动隐藏
-    HOVER_HIDE_INTERVAL = 250  # 靠近检测轮询间隔（毫秒）
+    HOVER_HIDE_INTERVAL = 100  # 靠近检测轮询间隔（毫秒，越小反应越快）
 
     def __init__(self, theme_manager, course_manager, weather_manager, config, parent=None):
         super().__init__(parent)
@@ -312,6 +312,8 @@ class IslandWindow(QWidget):
         self._screen_index = 0
         self._fullscreen = False
         self._width_ratio = float(config.get("island_width_ratio", 1.0))
+        self._glass_style = config.get("island_glass_style", "auto")
+        self._glass_custom = config.get("island_glass_custom", "#1E202D")
         self._opacity = float(config.get("opacity", 0.9))
         self._pass_through = False
         self._course_full_text = "今日无课程安排"
@@ -359,7 +361,7 @@ class IslandWindow(QWidget):
         self.bg_frame.setAttribute(Qt.WA_StyledBackground, True)
         self.bg_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.bg_frame.setStyleSheet(
-            "background-color: %s; border: none; border-radius: 0px;" % nav_bar_color())
+            "background-color: %s; border: none; border-radius: 0px;" % self._glass_bg())
         make_blur(self.bg_frame, radius=8)
         outer_layout.addWidget(self.bg_frame, 0, 0)
 
@@ -649,6 +651,36 @@ class IslandWindow(QWidget):
         return self._hover_hide
 
     # ==================================================================
+    #  毛玻璃样式（可自定义）
+    # ==================================================================
+    def _glass_bg(self):
+        """返回当前毛玻璃背景色：auto=跟随主题，dark/light=固定深浅，custom=自定义色。"""
+        style = self._glass_style
+        if style == "dark":
+            return "rgba(30, 30, 40, 0.7)"
+        if style == "light":
+            return "rgba(255, 255, 255, 0.72)"
+        if style == "custom":
+            c = QColor(self._glass_custom or "#1E202D")
+            return "rgba(%d, %d, %d, 0.72)" % (c.red(), c.green(), c.blue())
+        return nav_bar_color()
+
+    def _apply_glass_bg(self):
+        if hasattr(self, "bg_frame"):
+            self.bg_frame.setStyleSheet(
+                "background-color: %s; border: none; border-radius: 0px;" % self._glass_bg())
+
+    def set_glass_style(self, style, custom_hex=""):
+        """设置毛玻璃样式：auto / dark / light / custom。"""
+        self._glass_style = style
+        if custom_hex:
+            self._glass_custom = custom_hex
+        self._apply_glass_bg()
+
+    def glass_style(self):
+        return self._glass_style
+
+    # ==================================================================
     #  屏幕适配（多显示器 / 热插拔）
     # ==================================================================
     def current_screen(self):
@@ -813,8 +845,7 @@ class IslandWindow(QWidget):
     # ==================================================================
     def _on_theme_changed(self, theme_name):
         colors = theme_colors()
-        self.bg_frame.setStyleSheet(
-            "background-color: %s; border: none; border-radius: 0px;" % nav_bar_color(theme_name))
+        self._apply_glass_bg()
         self.date_label.setStyleSheet("color: %s;" % colors["text_secondary"])
         self.warning_label.setStyleSheet("color: %s;" % colors["danger"])
         self.warning_panel.setStyleSheet(
