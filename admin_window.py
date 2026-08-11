@@ -252,7 +252,7 @@ class AdminWindow(QMainWindow):
         self._btn_toggle_island = QPushButton("隐藏灵动岛")
         self._btn_toggle_island.clicked.connect(self._toggle_island)
         btn_refresh = QPushButton("刷新天气")
-        btn_refresh.clicked.connect(lambda: self.weather.refresh())
+        btn_refresh.clicked.connect(lambda: self.weather.refresh(force=True))
         btn_editor = QPushButton("打开课程表编辑器")
         btn_editor.setProperty("class", "primary")
         btn_editor.clicked.connect(self._open_editor)
@@ -542,7 +542,7 @@ class AdminWindow(QMainWindow):
         self._weather_status.setProperty("class", "setting-hint")
         cl.addWidget(self._weather_status)
         refresh_btn = QPushButton("立即刷新天气")
-        refresh_btn.clicked.connect(lambda: self.weather.refresh())
+        refresh_btn.clicked.connect(lambda: self.weather.refresh(force=True))
         cl.addWidget(refresh_btn)
         self._update_weather_status()
 
@@ -586,6 +586,13 @@ class AdminWindow(QMainWindow):
             lines.append("湿度 %s%% · 风向 %s %s级 · 气压 %shPa" % (
                 cache.get("humidity", "--"), cache.get("wind_dir", "--"),
                 cache.get("wind_scale", "--"), cache.get("pressure", "--")))
+            indices = cache.get("indices") or []
+            if indices:
+                parts = []
+                for i in indices[:5]:
+                    cat = i.get("category") or i.get("level") or ""
+                    parts.append("%s%s" % (i.get("name", ""), cat))
+                lines.append("生活指数：" + " · ".join(parts))
             warnings = cache.get("warnings") or []
             if warnings:
                 for w in warnings[:2]:

@@ -11,6 +11,7 @@
 #   · 注：GeoAPI 可能被账号安全限制拦截，故 LocationID 用内置城市表兜底
 # ==========================================================================
 
+import time
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QThread, Signal, QTimer
@@ -148,6 +149,8 @@ class WeatherWorker(QThread):
     HOURLY_PATH = "/v7/weather/24h"
     AIR_PATH = "/airquality/v1/current/{lat}/{lon}"
     WARN_PATH = "/weatheralert/v1/current/{lat}/{lon}"
+    INDICES_PATH = "/v7/indices/1d"
+    INDICES_TYPES = "1,2,3,5,6"   # 1穿衣 2洗车 3感冒 5运动 6紫外线
     TIMEOUT = 8
 
     def __init__(self, api_key, city, api_host, auto_locate, parent=None):
@@ -272,6 +275,10 @@ class WeatherWorker(QThread):
             hourly = self._get(self.HOURLY_PATH, {"location": location_id})
             hourly_data = hourly.get("hourly", []) if hourly and hourly.get("code") == "200" else []
 
+            indices = self._get(self.INDICES_PATH, {
+                "location": location_id, "type": self.INDICES_TYPES})
+            indices_data = indices.get("daily", []) if indices and indices.get("code") == "200" else []
+
             result = {
                 "temp": now_data.get("temp", "--"),
                 "feels_like": now_data.get("feelsLike", "--"),
@@ -292,7 +299,7 @@ class WeatherWorker(QThread):
                 "daily": daily,
                 "hourly": hourly_data,
                 "minutely": "",
-                "indices": [],
+                "indices": indices_data,
                 "city": city_name,
                 "location": {
                     "id": location_id,
@@ -397,6 +404,7 @@ class WeatherManager(QObject):
         self.api_host = self.config.get("api_host", "https://api.qweather.com")
         self.auto_locate = bool(self.config.get("auto_locate", True))
         self._worker = None
+        self._cooldown_until = 0.0
         self.cache = self._load_cache()
 
         self.timer = QTimer(self)
@@ -418,8 +426,14 @@ class WeatherManager(QObject):
             self._worker.requestInterruption()
             self._worker.wait(9000)
 
-    def refresh(self):
-        """发起一次异步天气刷新（若已有请求在跑则跳过）。"""
+    def refresh(self, force=False):
+        """发起一次异步天气刷新（若已有请求在跑则跳过）。
+
+        失败后进入 60 秒冷却：避免在接口被限制时反复请求导致账号冻结。
+        手动操作可传 force=True 强制刷新。
+        """
+        if not force and time.time() < self._cooldown_until:
+            return
         if self._worker is not None and self._worker.isRunning():
             return
         self._worker = WeatherWorker(
@@ -448,7 +462,8 @@ class WeatherManager(QObject):
         self.updated.emit(data)
 
     def _on_fail(self, info):
-        """请求失败：携带缓存数据广播（岛窗据此展示 '[缓存] ...'）。"""
+        """请求失败：进入冷却、携带缓存数据广播（岛窗据此展示 '[缓存] ...'）。"""
+        self._cooldown_until = time.time() + 60
         cached = dict(self.cache) if self.cache else None
         self.failed.emit({
             "cached": cached,
