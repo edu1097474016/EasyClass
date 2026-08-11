@@ -1,0 +1,11 @@
+{
+  "app_name": "易课",
+  "app_version": "1.0.0",
+  "weather_api_key": "请填写你的API密钥",
+  "weather_city": "北京",
+  "opacity": 0.65,
+  "password": "admin123",
+  "api_provider": "hefeng",
+  "island_width_ratio": 0.85,
+  "theme": "dark"
+}

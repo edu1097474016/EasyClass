@@ -1,0 +1,11 @@
+{
+  "monday": [
+    {"start": "08:00", "end": "08:45", "name": "语文", "teacher": "张老师", "room": "101"}
+  ],
+  "tuesday": [],
+  "wednesday": [],
+  "thursday": [],
+  "friday": [],
+  "saturday": [],
+  "sunday": []
+}

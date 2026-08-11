@@ -1,0 +1,418 @@
+/* ==========================================================================
+   易课 EasyClass v1.0.0 | Silicon UI  —  深色主题 style_dark.qss
+   --------------------------------------------------------------------------
+   说明：Qt 样式表不支持 CSS 变量，本文件顶部的 "--xxx: value;" 变量行由
+   ThemeManager 读取、替换并剥离（把 var(--xxx) 替换为真实颜色值）。
+   两套主题共用同一套选择器，仅颜色变量不同。
+   ========================================================================== */
+
+/* ---------------- 颜色变量 ---------------- */
+--bg-main: #121218;
+--bg-card: rgba(30, 32, 45, 0.85);
+--text-main: #F0F0F5;
+--text-secondary: #A0A0B8;
+--border-color: rgba(255, 255, 255, 0.08);
+--primary-color: #8B5CF6;
+--danger-color: #F43F5E;
+--toggle-on: #8B5CF6;
+--toggle-off: #333344;
+--shadow-color: rgba(0, 0, 0, 0.3);
+--hover-bg: rgba(255, 255, 255, 0.12);
+--pressed-bg: rgba(255, 255, 255, 0.04);
+--primary-hover: rgba(139, 92, 246, 0.85);
+--primary-pressed: rgba(139, 92, 246, 0.70);
+--danger-hover: rgba(244, 63, 94, 0.85);
+--danger-pressed: rgba(244, 63, 94, 0.70);
+--separator: rgba(255, 255, 255, 0.12);
+--success-color: #22C55E;
+--error-color: #FF4444;
+--warning-bg: rgba(244, 63, 94, 0.20);
+--input-bg: rgba(30, 32, 45, 0.85);
+--scrollbar-handle: #A0A0B8;
+--tab-hover: #F0F0F5;
+--dashed-color: rgba(255, 255, 255, 0.25);
+
+/* ---------------- 全局 ---------------- */
+* {
+    outline: none;
+}
+QWidget {
+    background: transparent;
+    color: var(--text-main);
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
+}
+QWidget#mainWindow {
+    background-color: var(--bg-main);
+}
+QDialog {
+    background: transparent;
+}
+
+/* ---------------- 卡片容器 ---------------- */
+QFrame[class="card"] {
+    background-color: var(--bg-card);
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+}
+QFrame[class="card"]:hover {
+    border-color: var(--primary-color);
+}
+QFrame#glassCard {
+    background-color: var(--bg-card);
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+}
+QFrame#maskCard {
+    background-color: var(--bg-card);
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+}
+
+/* 灵动岛背景 */
+QFrame#islandBackground {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 22px;
+}
+
+/* 分隔线 */
+QFrame[class="separator"] {
+    background-color: var(--separator);
+    border: none;
+    border-radius: 0;
+}
+
+/* ---------------- 普通按钮 ---------------- */
+QPushButton {
+    background-color: var(--hover-bg);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: var(--hover-bg);
+}
+QPushButton:pressed {
+    background-color: var(--pressed-bg);
+}
+QPushButton:disabled {
+    color: var(--text-secondary);
+    background-color: var(--pressed-bg);
+}
+
+/* 主按钮 */
+QPushButton[class="primary"] {
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    font-weight: 600;
+}
+QPushButton[class="primary"]:hover {
+    background: var(--primary-hover);
+}
+QPushButton[class="primary"]:pressed {
+    background: var(--primary-pressed);
+}
+
+/* 危险按钮 */
+QPushButton[class="danger"] {
+    background: var(--danger-color);
+    color: white;
+    border: none;
+    font-weight: 600;
+}
+QPushButton[class="danger"]:hover {
+    background: var(--danger-hover);
+}
+QPushButton[class="danger"]:pressed {
+    background: var(--danger-pressed);
+}
+
+/* 关闭/圆形图标按钮 */
+QPushButton[class="icon-btn"] {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font-size: 16pt;
+    padding: 4px;
+}
+QPushButton[class="icon-btn"]:hover {
+    background: var(--hover-bg);
+    color: var(--text-main);
+}
+QPushButton[class="icon-btn"]:pressed {
+    background: var(--pressed-bg);
+}
+
+/* 红色圆形删除按钮 */
+QPushButton[class="delete-btn"] {
+    background: transparent;
+    border: none;
+    border-radius: 12px;
+    color: var(--danger-color);
+    font-size: 14pt;
+    font-weight: 700;
+    padding: 2px;
+}
+QPushButton[class="delete-btn"]:hover {
+    background: var(--danger-color);
+    color: white;
+}
+
+/* 课程卡片 */
+CourseCard,
+QFrame[class="course-card"] {
+    background-color: var(--bg-card);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 4px 0;
+    border: 1px solid var(--border-color);
+}
+CourseCard:hover,
+QFrame[class="course-card"]:hover {
+    border-color: var(--primary-color);
+}
+
+/* ---------------- 输入框 ---------------- */
+QLineEdit,
+QTextEdit,
+QPlainTextEdit {
+    background-color: var(--input-bg);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px 14px;
+    selection-background-color: var(--primary-color);
+    selection-color: white;
+}
+QLineEdit:focus,
+QTextEdit:focus,
+QPlainTextEdit:focus {
+    border-color: var(--primary-color);
+}
+QLineEdit:disabled {
+    color: var(--text-secondary);
+}
+
+/* 时间/日期编辑控件 */
+QTimeEdit, QDateEdit, QDateTimeEdit {
+    background-color: var(--input-bg);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+QTimeEdit:focus, QDateEdit:focus, QDateTimeEdit:focus {
+    border-color: var(--primary-color);
+}
+QTimeEdit::up-button, QTimeEdit::down-button,
+QDateEdit::up-button, QDateEdit::down-button,
+QDateTimeEdit::up-button, QDateTimeEdit::down-button {
+    width: 0px;
+    border: none;
+    background: transparent;
+}
+
+/* 下拉框 */
+QComboBox {
+    background-color: var(--input-bg);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+QComboBox:focus { border-color: var(--primary-color); }
+QComboBox::drop-down { border: none; width: 24px; }
+QComboBox QAbstractItemView {
+    background-color: var(--bg-main);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    selection-background-color: var(--primary-color);
+    selection-color: white;
+}
+
+/* ---------------- 滑块 ---------------- */
+QSlider::groove:horizontal {
+    height: 6px;
+    background: var(--border-color);
+    border-radius: 3px;
+}
+QSlider::sub-page:horizontal {
+    background: var(--primary-color);
+    border-radius: 3px;
+}
+QSlider::handle:horizontal {
+    background: var(--primary-color);
+    width: 18px;
+    height: 18px;
+    margin: -6px 0;
+    border-radius: 9px;
+}
+QSlider::handle:horizontal:hover {
+    background: var(--primary-hover);
+}
+QSlider::groove:vertical {
+    width: 6px;
+    background: var(--border-color);
+    border-radius: 3px;
+}
+QSlider::sub-page:vertical {
+    background: var(--primary-color);
+    border-radius: 3px;
+}
+QSlider::handle:vertical {
+    background: var(--primary-color);
+    width: 18px;
+    height: 18px;
+    margin: 0 -6px;
+    border-radius: 9px;
+}
+
+/* ---------------- iOS 风格开关 ---------------- */
+QCheckBox {
+    spacing: 10px;
+    color: var(--text-main);
+}
+QCheckBox::indicator {
+    width: 44px;
+    height: 26px;
+    border-radius: 13px;
+    background: var(--toggle-off);
+    border: none;
+}
+QCheckBox::indicator:checked {
+    background: var(--toggle-on);
+}
+
+/* ---------------- 滚动条 ---------------- */
+QScrollBar:vertical {
+    background: transparent;
+    width: 6px;
+    border-radius: 3px;
+    margin: 2px;
+}
+QScrollBar::handle:vertical {
+    background: var(--scrollbar-handle);
+    border-radius: 3px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover {
+    background: var(--primary-color);
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+    background: transparent;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 6px;
+    border-radius: 3px;
+    margin: 2px;
+}
+QScrollBar::handle:horizontal {
+    background: var(--scrollbar-handle);
+    border-radius: 3px;
+    min-width: 30px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: var(--primary-color);
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: transparent;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+    background: transparent;
+}
+
+/* ---------------- Tab 标签页（胶囊样式） ---------------- */
+QTabWidget::pane {
+    border: none;
+    background: transparent;
+}
+QTabBar {
+    background: transparent;
+}
+QTabBar::tab {
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 10px 24px;
+    border-radius: 20px;
+    font-size: 14pt;
+    font-weight: 500;
+    margin: 2px;
+}
+QTabBar::tab:selected {
+    background: var(--primary-color);
+    color: white;
+}
+QTabBar::tab:hover {
+    color: var(--tab-hover);
+}
+
+/* ---------------- 滚动区域 ---------------- */
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+/* ---------------- Toast ---------------- */
+QFrame[class="toast"] {
+    background-color: var(--bg-card);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+/* ---------------- 下拉菜单 ---------------- */
+QMenu {
+    background-color: var(--bg-main);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 6px;
+}
+QMenu::item {
+    background: transparent;
+    padding: 8px 26px 8px 14px;
+    border-radius: 6px;
+}
+QMenu::item:selected {
+    background: var(--primary-color);
+    color: white;
+}
+QMenu::item:disabled {
+    color: var(--text-secondary);
+}
+QMenu::separator {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 8px;
+}
+QMenu::indicator {
+    width: 16px;
+    height: 16px;
+}
+
+/* ---------------- ToolTip ---------------- */
+QToolTip {
+    background-color: var(--bg-main);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+
+/* ---------------- 消息框 ---------------- */
+QMessageBox {
+    background-color: var(--bg-main);
+}
