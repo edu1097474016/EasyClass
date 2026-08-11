@@ -72,6 +72,9 @@ def main():
 
     # ---------- 8. 灵动岛主窗口（默认隐藏） ----------
     island = IslandWindow(theme, courses, weather, config)
+    # 天气数据 → 灵动岛（修复：原先未连接导致岛窗天气不更新）
+    weather.updated.connect(island._on_weather)
+    weather.failed.connect(island._on_weather_failed)
 
     # ---------- 9. 回调函数 ----------
     def open_editor():

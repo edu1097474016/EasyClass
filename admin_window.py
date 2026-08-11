@@ -68,6 +68,7 @@ class AdminWindow(QMainWindow):
         self.courses = course_manager
 
         self._palette = {}
+        self._weather_error = ""
 
         self.setWindowTitle("易课管理后台")
         self.resize(s(1020), s(680))
@@ -85,7 +86,7 @@ class AdminWindow(QMainWindow):
 
         self.theme.theme_changed.connect(lambda _t: self._apply_style())
         self.weather.updated.connect(lambda _d: self._on_weather_update())
-        self.weather.failed.connect(lambda _d: self._on_weather_update())
+        self.weather.failed.connect(self._on_weather_failed)
         self._apply_style()
 
     # ==================================================================
@@ -291,6 +292,12 @@ class AdminWindow(QMainWindow):
         return "待刷新"
 
     def _on_weather_update(self):
+        self._weather_error = ""
+        self._refresh_dashboard()
+        self._update_weather_status()
+
+    def _on_weather_failed(self, info):
+        self._weather_error = info.get("message", "网络异常")
         self._refresh_dashboard()
         self._update_weather_status()
 
@@ -587,6 +594,9 @@ class AdminWindow(QMainWindow):
                 lines.append("当前无天气预警")
             self._weather_status.setText("\n".join(lines))
         else:
+            if self._weather_error:
+                self._weather_status.setText("天气获取失败：%s" % self._weather_error)
+                return
             key = self.config.get("weather_api_key", "")
             if not key or "请填写" in key or "你的API密钥" in key:
                 self._weather_status.setText("未配置 API Key，请在上方填写")
