@@ -54,8 +54,7 @@ class AdminWindow(QMainWindow):
         ("灵动岛", 2),
         ("天气", 3),
         ("课程表", 4),
-        ("安全设置", 5),
-        ("关于", 6),
+        ("关于", 5),
     ]
 
     def __init__(self, config, theme_manager, island, weather_manager,
@@ -135,7 +134,6 @@ class AdminWindow(QMainWindow):
             self._build_island,
             self._build_weather_page,
             self._build_schedule,
-            self._build_security,
             self._build_about,
         ]
         for builder in builders:
@@ -520,6 +518,13 @@ class AdminWindow(QMainWindow):
         self.city_edit.setFixedWidth(s(220))
         self._row(cl, "城市", self.city_edit, "关闭自动定位后可手动填写")
 
+        self.coords_edit = QLineEdit()
+        self.coords_edit.setText(self.config.get("weather_coords", ""))
+        self.coords_edit.setPlaceholderText("例如 30.2742,120.155（纬度,经度）")
+        self.coords_edit.setFixedWidth(s(220))
+        self._row(cl, "精确经纬度", self.coords_edit,
+                  "选填；填了就用该坐标查空气/预警，比 IP 定位更准（地图上可查到）")
+
         self.host_edit = QLineEdit()
         self.host_edit.setText(self.config.get("api_host", "https://api.qweather.com"))
         self.host_edit.setPlaceholderText("https://你的专属Host")
@@ -561,6 +566,7 @@ class AdminWindow(QMainWindow):
         host = self.host_edit.text().strip()
         self.config["api_host"] = host or "https://api.qweather.com"
         self.config["auto_locate"] = self.auto_locate_switch.isChecked()
+        self.config["weather_coords"] = self.coords_edit.text().strip()
         utils.save_config(self.config)
         self.weather.update_config(self.config)
         self._refresh_dashboard()
@@ -658,37 +664,7 @@ class AdminWindow(QMainWindow):
         self._today_courses_label.setText(text)
 
     # ==================================================================
-    #  页面 6：安全设置
-    # ==================================================================
-    def _build_security(self, layout):
-        self._header(layout, "设置 / 安全", "安全设置")
-
-        cl = self._card(layout, "编辑密码")
-        hint = QLabel("课程表编辑器的访问密码，双击灵动岛或按 Ctrl+E 打开编辑器时校验。")
-        hint.setProperty("class", "setting-hint")
-        hint.setWordWrap(True)
-        cl.addWidget(hint)
-        self.pass_edit = QLineEdit()
-        self.pass_edit.setText(self.config.get("password", "admin123"))
-        self.pass_edit.setEchoMode(QLineEdit.Password)
-        self.pass_edit.setFixedWidth(s(240))
-        self._row(cl, "新密码", self.pass_edit)
-
-        note = QLabel("管理后台本身无需密码，本机用户可直接打开。")
-        note.setProperty("class", "setting-hint")
-        note.setWordWrap(True)
-        cl.addWidget(note)
-
-        layout.addWidget(self._save_btn(self._save_security))
-
-    def _save_security(self):
-        pwd = self.pass_edit.text().strip() or "admin123"
-        self.config["password"] = pwd
-        utils.save_config(self.config)
-        show_toast("密码已更新")
-
-    # ==================================================================
-    #  页面 7：关于
+    #  页面 6：关于
     # ==================================================================
     def _build_about(self, layout):
         self._header(layout, "关于", "关于易课")
@@ -766,6 +742,7 @@ class AdminWindow(QMainWindow):
             content_bg = "#121218"
             nav_hover = "rgba(255, 255, 255, 0.08)"
             btn_hover = "rgba(255, 255, 255, 0.10)"
+            btn_pressed = "rgba(255, 255, 255, 0.22)"
             input_bg = "rgba(30, 32, 45, 0.85)"
             swatch_border = "#FFFFFF"
             stat_bg = "rgba(255, 255, 255, 0.03)"
@@ -775,6 +752,7 @@ class AdminWindow(QMainWindow):
             content_bg = "#FFFFFF"
             nav_hover = "#E8EBED"
             btn_hover = "rgba(0, 0, 0, 0.06)"
+            btn_pressed = "rgba(0, 0, 0, 0.14)"
             input_bg = "#FFFFFF"
             swatch_border = "#1A1A1A"
             stat_bg = "#F9FAFB"
@@ -791,7 +769,9 @@ class AdminWindow(QMainWindow):
             "primary_pressed": base.darker(112).name(),
             "nav_hover": nav_hover,
             "nav_active_bg": self._rgba(primary, 0.16),
+            "nav_active_bg2": self._rgba(primary, 0.28),
             "btn_hover": btn_hover,
+            "btn_pressed": btn_pressed,
             "input_bg": input_bg,
             "card_bg": colors["bg_card"],
             "swatch_border": swatch_border,
@@ -853,6 +833,7 @@ QPushButton[class="nav"] {
     font-size: 13px;
 }
 QPushButton[class="nav"]:hover { background: %(nav_hover)s; color: %(text_main)s; }
+QPushButton[class="nav"]:pressed { background: %(nav_active_bg2)s; color: %(primary)s; }
 QPushButton[class="nav"]:checked {
     background: %(nav_active_bg)s;
     color: %(primary)s;
@@ -888,7 +869,7 @@ QPushButton {
     font-size: 13px;
 }
 QPushButton:hover { background: %(btn_hover)s; }
-QPushButton:pressed { background: %(nav_active_bg)s; }
+QPushButton:pressed { background: %(btn_pressed)s; }
 QPushButton:disabled { color: %(text_secondary)s; background: transparent; }
 QPushButton[class="primary"] {
     background: %(primary)s;

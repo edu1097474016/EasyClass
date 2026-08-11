@@ -153,13 +153,28 @@ class WeatherWorker(QThread):
     INDICES_TYPES = "1,2,3,5,6"   # 1穿衣 2洗车 3感冒 5运动 6紫外线
     TIMEOUT = 8
 
-    def __init__(self, api_key, city, api_host, auto_locate, parent=None):
+    def __init__(self, api_key, city, api_host, auto_locate,
+                 weather_coords="", parent=None):
         super().__init__(parent)
         self.api_key = (api_key or "").strip()
         self.city = (city or "").strip()
         self.api_host = (api_host or "https://api.qweather.com").strip().rstrip("/")
         self.auto_locate = auto_locate
+        self.weather_coords = (weather_coords or "").strip()
         self._last_error = ""
+
+    @staticmethod
+    def _parse_coords(text):
+        """解析用户填写的经纬度（'纬度,经度'），非法返回 None。"""
+        try:
+            parts = [p.strip() for p in (text or "").split(",")]
+            if len(parts) == 2 and parts[0] and parts[1]:
+                lat, lon = float(parts[0]), float(parts[1])
+                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                    return ("%.4f" % lat, "%.4f" % lon)
+        except (ValueError, TypeError):
+            pass
+        return None
 
     # ------------------------------------------------------------------
     #  HTTP 封装
@@ -234,20 +249,27 @@ class WeatherWorker(QThread):
                 self.fail.emit({"message": "未配置API密钥"})
                 return
 
-            # 1. 定位：自动定位优先，否则按手动城市
-            located = self._auto_locate() if self.auto_locate else None
-            city_name = ""
+            # 1. 定位优先级：手动精确经纬度 > IP 自动定位 > 手动城市名
+            coords = self._parse_coords(self.weather_coords)
+            located = self._auto_locate() if self.auto_locate or (coords and not self.city) else None
+            city_name = self.city
             lat = lon = None
-            if located:
+            if coords:
+                lat, lon = coords
+                if not city_name and located:
+                    city_name = located.get("city", "")
+            if lat is None and located:
                 lat, lon = located["lat"], located["lon"]
-                city_name = located["city"]
-            else:
+                if not city_name:
+                    city_name = located.get("city", "")
+            if lat is None:
                 loc = self._city_lookup(self.city)
                 if not loc:
                     self.fail.emit({"message": "未收录城市：%s，请在天气设置中重新指定" % self.city})
                     return
                 lat, lon = loc["lat"], loc["lon"]
-                city_name = self.city
+                if not city_name:
+                    city_name = self.city
 
             # 2. 城市 → LocationID（内置表兜底，缺省用北京）
             city_loc = self._city_lookup(city_name) or self._city_lookup(self.city)
@@ -403,6 +425,7 @@ class WeatherManager(QObject):
         self.city = self.config.get("weather_city", "北京")
         self.api_host = self.config.get("api_host", "https://api.qweather.com")
         self.auto_locate = bool(self.config.get("auto_locate", True))
+        self.weather_coords = self.config.get("weather_coords", "")
         self._worker = None
         self._cooldown_until = 0.0
         self.cache = self._load_cache()
@@ -437,7 +460,8 @@ class WeatherManager(QObject):
         if self._worker is not None and self._worker.isRunning():
             return
         self._worker = WeatherWorker(
-            self.api_key, self.city, self.api_host, self.auto_locate)
+            self.api_key, self.city, self.api_host, self.auto_locate,
+            weather_coords=self.weather_coords)
         self._worker.ok.connect(self._on_ok)
         self._worker.fail.connect(self._on_fail)
         self._worker.start()
@@ -449,6 +473,7 @@ class WeatherManager(QObject):
         self.city = config.get("weather_city", "北京")
         self.api_host = config.get("api_host", "https://api.qweather.com")
         self.auto_locate = bool(config.get("auto_locate", True))
+        self.weather_coords = config.get("weather_coords", "")
         self.refresh()
 
     # ------------------------------------------------------------------

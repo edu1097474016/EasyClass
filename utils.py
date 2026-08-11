@@ -172,6 +172,7 @@ def load_config():
         "app_version": APP_VERSION,
         "weather_api_key": "请填写你的API密钥",
         "weather_city": "北京",
+        "weather_coords": "",
         "api_host": "https://api.qweather.com",
         "auto_locate": True,
         "opacity": 0.65,

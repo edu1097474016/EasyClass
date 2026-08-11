@@ -18,7 +18,7 @@
 --toggle-off: #333344;
 --shadow-color: rgba(0, 0, 0, 0.3);
 --hover-bg: rgba(255, 255, 255, 0.12);
---pressed-bg: rgba(255, 255, 255, 0.04);
+--pressed-bg: rgba(255, 255, 255, 0.18);
 --primary-hover: rgba(139, 92, 246, 0.85);
 --primary-pressed: rgba(139, 92, 246, 0.70);
 --danger-hover: rgba(244, 63, 94, 0.85);
