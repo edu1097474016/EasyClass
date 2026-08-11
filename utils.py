@@ -34,6 +34,37 @@ APP_TAG = "易课 EasyClass v1.0.0 | Silicon UI"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RES_DIR = os.path.join(BASE_DIR, "res")
 
+# 数据目录：配置 / 缓存 / 日志统一写入 data/ 下
+DATA_DIR = os.path.join(BASE_DIR, "data")
+LOG_DIR = os.path.join(DATA_DIR, "logs")
+
+
+def ensure_data_dir():
+    """创建 data/ 目录（含 logs/ 子目录）。"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+
+def data_file(name):
+    """返回 data/ 目录下的文件绝对路径。"""
+    return os.path.join(DATA_DIR, name)
+
+
+def migrate_old_files():
+    """把旧版位于项目根目录的配置文件迁移到 data/ 目录。"""
+    ensure_data_dir()
+    for name in ("config.json", "schedule.json", "weather_cache.json"):
+        old = os.path.join(BASE_DIR, name)
+        new = os.path.join(DATA_DIR, name)
+        if os.path.exists(old) and not os.path.exists(new):
+            try:
+                shutil.move(old, new)
+            except Exception:
+                try:
+                    shutil.copyfile(old, new)
+                except Exception:
+                    pass
+
 FONT_FAMILY = "Microsoft YaHei UI"
 
 # ==========================================================================
@@ -103,12 +134,13 @@ def is_os_dark():
 # ==========================================================================
 
 def ensure_config_files():
-    """config.json / schedule.json 不存在时从模板复制。"""
+    """config.json / schedule.json 不存在时从模板复制（写入 data/）。"""
+    ensure_data_dir()
     for target, template in (
         ("config.json", "config.template.json"),
         ("schedule.json", "schedule.template.json"),
     ):
-        target_path = os.path.join(BASE_DIR, target)
+        target_path = os.path.join(DATA_DIR, target)
         if not os.path.exists(target_path):
             template_path = os.path.join(BASE_DIR, template)
             if os.path.exists(template_path):
@@ -131,28 +163,34 @@ def save_json(path, data):
 
 
 def load_config():
-    """加载主配置 config.json，缺省字段自动补齐。"""
+    """加载主配置 data/config.json，缺省字段自动补齐。"""
+    ensure_data_dir()
+    migrate_old_files()
     ensure_config_files()
     default = {
         "app_name": APP_NAME,
         "app_version": APP_VERSION,
         "weather_api_key": "请填写你的API密钥",
         "weather_city": "北京",
+        "api_host": "https://api.qweather.com",
+        "auto_locate": True,
         "opacity": 0.65,
         "password": "admin123",
         "api_provider": "hefeng",
         "island_width_ratio": 0.85,
         "theme": "dark",
+        "theme_color": "#40916C",
+        "hover_hide": True,
     }
-    cfg = load_json(os.path.join(BASE_DIR, "config.json"), {})
+    cfg = load_json(data_file("config.json"), {})
     for key, value in default.items():
         cfg.setdefault(key, value)
     return cfg
 
 
 def save_config(cfg):
-    """保存主配置 config.json。"""
-    save_json(os.path.join(BASE_DIR, "config.json"), cfg)
+    """保存主配置 data/config.json。"""
+    save_json(data_file("config.json"), cfg)
 
 
 # ==========================================================================
@@ -362,6 +400,17 @@ class ToggleSwitch(QAbstractButton):
         self._anim_value = 1.0 if checked else 0.0
         self.update()
 
+    @staticmethod
+    def _theme_primary():
+        """读取当前生效的主题色（支持自定义主题色）。"""
+        try:
+            from theme_manager import ThemeManager
+            theme = QApplication.instance().property("__theme") or "dark"
+            return ThemeManager.COLORS.get(theme, ThemeManager.COLORS["dark"])["primary"]
+        except Exception:
+            theme = QApplication.instance().property("__theme") or "dark"
+            return "#8B5CF6" if theme == "dark" else "#7C3AED"
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -371,7 +420,7 @@ class ToggleSwitch(QAbstractButton):
         # 轨道颜色：开=主题色，关=灰色
         theme = QApplication.instance().property("__theme") or "dark"
         if value > 0.5 or self.isChecked():
-            color = QColor("#8B5CF6" if theme == "dark" else "#7C3AED")
+            color = QColor(self._theme_primary())
         else:
             color = QColor("#333344" if theme == "dark" else "#D1D5DB")
         painter.setBrush(color)

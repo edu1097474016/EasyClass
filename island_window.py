@@ -15,11 +15,11 @@ from datetime import datetime, date
 
 from PySide6.QtCore import (
     Qt, QRect, QPoint, QRectF,
-    Signal, Property, QTimer, QPropertyAnimation, QEasingCurve, QAbstractAnimation,
+    Property, QTimer, QPropertyAnimation, QEasingCurve, QAbstractAnimation,
     QSize, QSizeF,
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QFontMetricsF, QGuiApplication, QPixmap,
+    QPainter, QColor, QPen, QFontMetricsF, QGuiApplication, QPixmap, QCursor,
 )
 from PySide6.QtWidgets import (
     QWidget, QLabel, QFrame, QHBoxLayout, QVBoxLayout, QGridLayout,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 import utils
 from utils import s, make_font, make_shadow, make_blur, enable_acrylic
 from icon_drawer import IconDrawer
+from weather_manager import aqi_color, warning_color_hex
 
 WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 WEEKDAY_CN2 = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
@@ -161,7 +162,8 @@ class WeatherDisplay(QWidget):
         self._temp = "--°C"
         self._error = False
         self._cached = False
-        self._err_text = "⚡ 网络异常"
+        self._air = None
+        self._err_text = "网络异常"
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setMinimumWidth(s(70))
 
@@ -172,19 +174,42 @@ class WeatherDisplay(QWidget):
         self._angle = value
         self.update()
 
+    def _aqi_text(self):
+        if not self._air:
+            return ""
+        aqi = self._air.get("aqi")
+        try:
+            return "AQI %d" % int(aqi)
+        except (TypeError, ValueError):
+            return ""
+
+    def sizeHint(self):
+        fm = QFontMetricsF(make_font(FONT_MAIN))
+        w = s(2) + s(18) + s(6) + fm.horizontalAdvance(self._temp)
+        aqi = self._aqi_text()
+        if aqi:
+            w += s(10) + fm.horizontalAdvance(aqi)
+        return QSize(int(w) + s(2), s(26))
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
     def set_weather(self, data):
         colors = theme_colors()
         self._error = False
         self._cached = bool(data.get("cached"))
         self._temp = "%s°C" % data.get("temp", "--")
+        self._air = data.get("air") or None
         self._icon = IconDrawer.weather_icon(
             data.get("code", 999), s(18), fg=colors["icon_fg"])
+        self.updateGeometry()
         self.update()
 
     def set_error(self, cached, message):
         colors = theme_colors()
         self._error = True
         self._cached = cached is not None
+        self._air = (cached or {}).get("air") or None
         if cached:
             self._temp = "%s°C" % cached.get("temp", "--")
             self._icon = IconDrawer.weather_icon(
@@ -192,6 +217,7 @@ class WeatherDisplay(QWidget):
         else:
             self._temp = "--°C"
             self._icon = QPixmap()
+        self.updateGeometry()
         self.update()
 
     def paintEvent(self, event):
@@ -226,6 +252,18 @@ class WeatherDisplay(QWidget):
             painter.setPen(QColor(colors["text_main"]))
             text = self._temp
         painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)
+
+        # 空气质量 AQI 徽标（温度右侧）
+        aqi = self._aqi_text()
+        if aqi:
+            aqi_w = fm.horizontalAdvance(aqi)
+            ax = text_x + fm.horizontalAdvance(text) + s(10)
+            pen = QColor(aqi_color(self._air.get("aqi")))
+            pen.setAlpha(220)
+            painter.setPen(pen)
+            painter.drawText(
+                QRectF(ax, (self.height() - fm.height()) / 2, aqi_w, fm.height()),
+                Qt.AlignLeft | Qt.AlignVCenter, aqi)
         painter.restore()
         painter.end()
 
@@ -237,11 +275,11 @@ class WeatherDisplay(QWidget):
 class IslandWindow(QWidget):
     """固定顶部、全屏宽的导航栏信息条。"""
 
-    editor_requested = Signal()
-
     NAV_HEIGHT = 40            # 高度固定 40px（× DPI 缩放）
     HIDE_WEATHER_WIDTH = 560   # 宽度小于该值（逻辑像素）时隐藏天气
     HIDE_COURSE_WIDTH = 320    # 极端窄屏再隐藏课程
+    HOVER_HIDE_MARGIN = 60     # 鼠标靠近灵动岛多少像素内自动隐藏
+    HOVER_HIDE_INTERVAL = 250  # 靠近检测轮询间隔（毫秒）
 
     def __init__(self, theme_manager, course_manager, weather_manager, config, parent=None):
         super().__init__(parent)
@@ -256,6 +294,12 @@ class IslandWindow(QWidget):
         self._opacity = float(config.get("opacity", 0.9))
         self._pass_through = False
         self._course_full_text = "今日无课程安排"
+        self._warnings = []
+
+        # 鼠标靠近自动隐藏（默认开启）
+        self._hover_hide = bool(config.get("hover_hide", True))
+        self._hover_auto_hidden = False
+        self._sliding = False
 
         # ---- 窗口配置：置顶 / 无边框 / 工具窗 / 不抢焦点 / 透明背景 ----
         self.setWindowFlags(
@@ -469,6 +513,47 @@ class IslandWindow(QWidget):
         self._course_timer.timeout.connect(self.update_course)
         self._course_timer.start()
 
+        # 鼠标靠近自动隐藏轮询
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setInterval(self.HOVER_HIDE_INTERVAL)
+        self._hover_timer.timeout.connect(self._check_hover_hide)
+        self._hover_timer.start()
+
+    # ==================================================================
+    #  鼠标靠近自动隐藏
+    # ==================================================================
+    def _hover_zone(self):
+        """鼠标靠近判定区域：灵动岛所在屏幕顶部的矩形（向下扩展边距）。"""
+        rect = self.calculate_island_geometry()
+        rect.setBottom(rect.bottom() + s(self.HOVER_HIDE_MARGIN))
+        return rect
+
+    def _check_hover_hide(self):
+        """鼠标靠近灵动岛时自动隐藏，鼠标移开区域后自动恢复显示。"""
+        if not self._hover_hide or self._sliding:
+            return
+        zone = self._hover_zone()
+        cursor = QCursor.pos()
+        if self.isVisible() and zone.contains(cursor):
+            if not self._hover_auto_hidden:
+                self._hover_auto_hidden = True
+                self.slide_out()
+        elif self._hover_auto_hidden and not self.isVisible() and not zone.contains(cursor):
+            self._hover_auto_hidden = False
+            self.slide_in()
+
+    def set_hover_hide(self, enabled):
+        """开启/关闭"鼠标靠近自动隐藏"。"""
+        self._hover_hide = bool(enabled)
+        if not self._hover_hide and self._hover_auto_hidden:
+            # 关闭该功能时，若当前因靠近而被隐藏，则恢复显示
+            self._hover_auto_hidden = False
+            if not self.isVisible():
+                self.slide_in()
+
+    def hover_hide_enabled(self):
+        return self._hover_hide
+
     # ==================================================================
     #  屏幕适配（多显示器 / 热插拔）
     # ==================================================================
@@ -531,6 +616,17 @@ class IslandWindow(QWidget):
         if hasattr(self, "_course_fade"):
             self._course_fade.start()
 
+        # 预警优先：有预警信息时优先展示预警（按等级颜色区分）
+        warnings = self._warnings
+        if warnings:
+            w = warnings[0]
+            color = w.get("color_hex") or warning_color_hex(w.get("color"))
+            title = w.get("title") or "".join(
+                [w.get("typeName", ""), w.get("level", "")]) or "天气预警"
+            self._set_course_text("预警 · %s" % title, dot=color)
+            self._set_breathing(True)
+            return
+
         status = self.course_manager.current_status()
         colors = theme_colors()
         current = status.get("current")
@@ -580,7 +676,9 @@ class IslandWindow(QWidget):
     # ==================================================================
     def _on_weather(self, data):
         self._shake_anim.stop()
+        self._warnings = data.get("warnings", []) or []
         self.weather_display.set_weather(data)
+        self.update_course()
 
     def _on_weather_failed(self, info):
         self.weather_display.set_error(info.get("cached"), info.get("message", ""))
@@ -644,11 +742,13 @@ class IslandWindow(QWidget):
         self.setWindowOpacity(self._opacity)
         self.show()
         self.raise_()
+        self._sliding = True
         anim = QPropertyAnimation(self, b"pos", self)
         anim.setDuration(300)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.setStartValue(start)
         anim.setEndValue(target)
+        anim.finished.connect(self._on_slide_done)
         anim.start()
 
     def slide_out(self):
@@ -657,13 +757,19 @@ class IslandWindow(QWidget):
             self.hide()
             return
         end = QPoint(self.x(), self.y() - self.height() - s(2))
+        self._sliding = True
         anim = QPropertyAnimation(self, b"pos", self)
         anim.setDuration(300)
         anim.setEasingCurve(QEasingCurve.Type.InCubic)
         anim.setStartValue(self.pos())
         anim.setEndValue(end)
         anim.finished.connect(self.hide)
+        anim.finished.connect(self._on_slide_done)
         anim.start()
+
+    def _on_slide_done(self):
+        """滑入/滑出动画结束，清除滑动状态。"""
+        self._sliding = False
 
     def toggle_visible(self):
         if self.isVisible():
@@ -716,10 +822,6 @@ class IslandWindow(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_adaptive_visibility()
-
-    def mouseDoubleClickEvent(self, event):
-        self.editor_requested.emit()
-        super().mouseDoubleClickEvent(event)
 
     def showEvent(self, event):
         super().showEvent(event)

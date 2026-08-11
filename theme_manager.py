@@ -13,6 +13,7 @@
 import os
 
 from PySide6.QtCore import QObject, Signal, QPropertyAnimation, QEasingCurve, QTimer
+from PySide6.QtGui import QColor
 
 from utils import RES_DIR, load_config, save_config, make_font
 
@@ -66,6 +67,9 @@ class ThemeManager(QObject):
         self.config = config if config is not None else load_config()
         self.current_theme = self.DARK
         self._fade_widgets = []
+        # 自定义主题色（默认取当前主题内置 primary）
+        custom = self.config.get("theme_color", "")
+        self.primary_color = custom if QColor(custom).isValid() else None
 
         # 从 config.json 读取主题
         saved = self.config.get("theme", self.DARK)
@@ -101,12 +105,53 @@ class ThemeManager(QObject):
         self.save_theme_to_config()
 
     # ------------------------------------------------------------------
+    #  主题色
+    # ------------------------------------------------------------------
+    def current_primary(self):
+        """返回当前生效的主题色（自定义优先，否则用主题内置值）。"""
+        if self.primary_color:
+            return self.primary_color
+        return self.COLORS[self.current_theme]["primary"]
+
+    def set_primary_color(self, color_hex):
+        """设置全局主题色（QSS + 自绘组件），并持久化到 config.json。"""
+        if not color_hex or not QColor(color_hex).isValid():
+            return
+        if color_hex.upper() != self.current_primary().upper():
+            self.primary_color = color_hex
+            self.apply_theme(animate=False)
+        self.config["theme_color"] = color_hex
+        save_config(self.config)
+
+    def _primary_overrides(self):
+        """把自定义主题色注入 QSS 变量替换表。"""
+        primary = self.current_primary()
+        base = QColor(primary)
+        if not base.isValid():
+            return {}
+        hover = QColor(base.red(), base.green(), base.blue(), 217)     # 0.85
+        pressed = QColor(base.red(), base.green(), base.blue(), 178)   # 0.70
+        return {
+            "--primary-color": primary,
+            "--toggle-on": primary,
+            "--primary-hover": "rgba(%d, %d, %d, 0.85)" % (
+                hover.red(), hover.green(), hover.blue()),
+            "--primary-pressed": "rgba(%d, %d, %d, 0.70)" % (
+                pressed.red(), pressed.green(), pressed.blue()),
+        }
+
+    def _sync_colors(self):
+        """把生效主题色同步进自绘组件读取的 COLORS 表。"""
+        self.COLORS[self.current_theme]["primary"] = self.current_primary()
+
+    # ------------------------------------------------------------------
     #  应用主题
     # ------------------------------------------------------------------
     def apply_theme(self, animate=True):
         """读取对应 QSS 文件并应用到全局，同时触发主题切换动画。"""
         qss_path = os.path.join(RES_DIR, "style_dark.qss" if self.current_theme == self.DARK else "style_light.qss")
-        qss = self._read_and_substitute(qss_path)
+        qss = self._read_and_substitute(qss_path, overrides=self._primary_overrides())
+        self._sync_colors()
         self.app.setStyleSheet(qss)
 
         # 通知自绘组件刷新颜色
@@ -125,7 +170,7 @@ class ThemeManager(QObject):
             anim.setDuration(150)
             anim.setStartValue(0.85)
             anim.setEndValue(1.0)
-            anim.setEasingCurve(QEasingCurve.Type.Linear)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
             anim.start()
 
     def save_theme_to_config(self):
@@ -136,8 +181,8 @@ class ThemeManager(QObject):
     # ------------------------------------------------------------------
     #  QSS 变量替换
     # ------------------------------------------------------------------
-    def _read_and_substitute(self, qss_path):
-        """读取 QSS，解析顶部变量行并替换 var(--xxx)。"""
+    def _read_and_substitute(self, qss_path, overrides=None):
+        """读取 QSS，解析顶部变量行并替换 var(--xxx)。overrides 可覆盖变量值。"""
         with open(qss_path, "r", encoding="utf-8") as f:
             raw = f.read()
 
@@ -150,6 +195,9 @@ class ThemeManager(QObject):
                 variables[key.strip()] = value.strip().rstrip(";")
             else:
                 kept_lines.append(line)
+
+        if overrides:
+            variables.update(overrides)
 
         css = "\n".join(kept_lines)
         for key, value in variables.items():

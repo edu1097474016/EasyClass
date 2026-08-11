@@ -15,6 +15,8 @@
 # ==========================================================================
 
 import sys
+import logging
+import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QShortcut, QKeySequence
@@ -26,44 +28,68 @@ from course_manager import CourseManager
 from weather_manager import WeatherManager
 from island_window import IslandWindow
 from tray_icon import TrayIcon
-from settings_dialog import open_schedule_editor, SettingsDialog
+from settings_dialog import open_schedule_editor
+
+
+def setup_logging():
+    """日志写入 data/logs/app.log。"""
+    utils.ensure_data_dir()
+    log_path = os.path.join(utils.LOG_DIR, "app.log")
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        encoding="utf-8",
+    )
 
 
 def main():
-    # ---------- 1. 配置文件检查 ----------
+    # ---------- 1. 数据目录与日志 ----------
+    utils.ensure_data_dir()
+    utils.migrate_old_files()
+    setup_logging()
+    logging.info("易课 EasyClass 启动")
+
+    # ---------- 3. 配置文件检查 ----------
     utils.ensure_config_files()
     config = utils.load_config()
 
-    # ---------- 2. 应用初始化 ----------
+    # ---------- 4. 应用初始化 ----------
     app = QApplication(sys.argv)
     app.setApplicationName(utils.APP_NAME)
     app.setApplicationVersion(utils.APP_VERSION)
     app.setQuitOnLastWindowClosed(False)   # 无窗口时保持托盘运行
     app.setStyle("Fusion")                 # 保证 QSS 在跨平台一致渲染
 
-    # ---------- 3. 主题管理 ----------
+    # ---------- 5. 主题管理 ----------
     theme = ThemeManager(app, config)
 
-    # ---------- 4. 课程表管理 ----------
+    # ---------- 6. 课程表管理 ----------
     courses = CourseManager()
 
-    # ---------- 5. 天气管理 ----------
+    # ---------- 7. 天气管理 ----------
     weather = WeatherManager(config)
 
-    # ---------- 6. 灵动岛主窗口（默认隐藏） ----------
+    # ---------- 8. 灵动岛主窗口（默认隐藏） ----------
     island = IslandWindow(theme, courses, weather, config)
 
-    # ---------- 7. 回调函数 ----------
+    # ---------- 9. 回调函数 ----------
     def open_editor():
         """打开课程表编辑器（先密码验证）。"""
         open_schedule_editor(None, courses, config)
 
-    def open_settings():
-        """打开设置对话框。"""
-        dialog = SettingsDialog(config, theme, island, weather)
-        dialog.exec()
+    admin_window = {"window": None}
 
-    # ---------- 8. 系统托盘 ----------
+    def open_settings():
+        """打开管理后台（扁平化设置界面，无需密码）。"""
+        from admin_window import AdminWindow
+        if admin_window["window"] is None:
+            admin_window["window"] = AdminWindow(config, theme, island, weather, courses)
+        admin_window["window"].show()
+        admin_window["window"].raise_()
+        admin_window["window"].activateWindow()
+
+    # ---------- 10. 系统托盘 ----------
     tray = TrayIcon(island, theme, weather, config, callbacks={
         "open_editor": open_editor,
         "open_settings": open_settings,
@@ -71,7 +97,7 @@ def main():
     })
     tray.show()
 
-    # ---------- 9. 全局热键 Ctrl+E（编辑课程表） ----------
+    # ---------- 11. 全局热键 Ctrl+E（编辑课程表） ----------
     MOD_CONTROL = 0x0002
     hotkey = utils.GlobalHotkey(MOD_CONTROL, ord("E"), parent=app)
     hotkey.triggered.connect(open_editor)
@@ -81,15 +107,12 @@ def main():
     shortcut.setContext(Qt.ApplicationShortcut)
     shortcut.activated.connect(open_editor)
 
-    # 双击灵动岛打开编辑器
-    island.editor_requested.connect(open_editor)
-
-    # ---------- 10. 启动定时器 ----------
+    # ---------- 12. 启动定时器 ----------
     weather.start()          # 立即刷新 + 30 分钟自动更新
     island.update_time()
     island.update_course()
 
-    # ---------- 11. 退出清理 ----------
+    # ---------- 13. 退出清理 ----------
     app.aboutToQuit.connect(weather.stop)
 
     return app.exec()

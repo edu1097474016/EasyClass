@@ -39,6 +39,7 @@ class TrayIcon(QSystemTrayIcon):
         # 右键菜单（每次弹出时重建动态项）
         self.menu = QMenu()
         self.menu.aboutToShow.connect(self._build_menu)
+        self.setContextMenu(self.menu)   # 修复：未绑定上下文菜单导致右键无反应
 
         # 左键单击：显示/隐藏主窗口
         self.activated.connect(self._on_activated)

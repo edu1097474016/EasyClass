@@ -1,9 +1,17 @@
 # 易课 EasyClass v1.0.0 | Silicon UI
 
 # 运行时生成文件（不纳入版本控制）
+# data/ 内含个人配置（含 API Key）、课程表、天气缓存与日志，一律不入库
+data/
 config.json
 schedule.json
 weather_cache.json
+
+# 个人信息 / 密钥（防止误提交）
+*.key
+*.pem
+*.secret
+.env
 
 # Python
 __pycache__/

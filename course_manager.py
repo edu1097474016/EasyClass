@@ -13,7 +13,7 @@ from datetime import datetime, date
 
 from PySide6.QtCore import QObject, Signal
 
-from utils import BASE_DIR, load_json, save_json
+from utils import data_file, load_json, save_json
 
 
 class CourseManager(QObject):
@@ -33,7 +33,7 @@ class CourseManager(QObject):
 
     def __init__(self, path=None, parent=None):
         super().__init__(parent)
-        self.path = path or os.path.join(BASE_DIR, "schedule.json")
+        self.path = path or data_file("schedule.json")
         self.data = {key: [] for key in self.DAY_KEYS}
         self.load()
 
