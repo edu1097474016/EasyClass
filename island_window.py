@@ -364,26 +364,24 @@ class IslandWindow(QWidget):
         outer_layout.addWidget(self.bg_frame, 0, 0)
 
         # 内容层（透明，浮于背景之上）
+        # 时间采用绝对定位精确居中，不随左右模块宽度变化而移动
         self.content_widget = QWidget(self.outer_frame)
         self.content_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         content = QHBoxLayout(self.content_widget)
         content.setContentsMargins(s(20), 0, s(20), 0)   # padding: 0 20px
-        content.setSpacing(s(8))
+        content.setSpacing(0)
         content.setAlignment(Qt.AlignVCenter)
         outer_layout.addWidget(self.content_widget, 0, 0)
 
-        # 左：课程信息（可收缩，超出时省略号）
+        # 左：课程信息（固定，可收缩，超出时省略号）
         self._build_course_section(content)
+        content.addStretch(1)
 
-        content.addStretch(1)                            # 左侧弹性空间
-
-        # 中：时钟 + 日期（永不压缩）
-        self._build_center_section(content)
-
-        content.addStretch(1)                            # 右侧弹性空间
-
-        # 右：温度
+        # 右：天气/AQI 与 预警 轮播
         self._build_weather_section(content)
+
+        # 中：时钟 + 日期（绝对居中，永不移动、永不压缩）
+        self._build_center_section(self.content_widget)
 
         # 预警：右上角浮层
         self._build_warning_overlay()
@@ -416,7 +414,7 @@ class IslandWindow(QWidget):
         self.course_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         row.addWidget(self.course_label)
 
-        content.addWidget(panel, stretch=0)
+        content.addWidget(panel)
         self.course_panel = panel
 
         # 课程切换淡入（InOutCubic 0.5s）
@@ -427,8 +425,8 @@ class IslandWindow(QWidget):
     # ------------------------------------------------------------------
     #  中：时钟 + 日期
     # ------------------------------------------------------------------
-    def _build_center_section(self, content):
-        box = QWidget(self.content_widget)
+    def _build_center_section(self, parent):
+        box = QWidget(parent)
         box.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         row = QHBoxLayout(box)
         row.setContentsMargins(0, 0, 0, 0)
@@ -450,10 +448,19 @@ class IslandWindow(QWidget):
 
         row.addWidget(self.time_label)
         row.addWidget(self.date_label)
-        content.addWidget(box, stretch=0)
         self.center_group = box
         # 时钟+日期按内容宽度固定尺寸，任何情况下禁止压缩
         self.center_group.setFixedSize(self.center_group.sizeHint())
+
+    def _recenter_time(self):
+        """把时间组绝对定位到内容区正中央（水平 + 垂直）。"""
+        if not hasattr(self, "center_group"):
+            return
+        w = self.content_widget.width()
+        h = self.content_widget.height()
+        self.center_group.move(
+            (w - self.center_group.width()) // 2,
+            (h - self.center_group.height()) // 2)
 
     # ------------------------------------------------------------------
     #  右：天气/AQI 与 预警 轮播
@@ -477,7 +484,7 @@ class IslandWindow(QWidget):
         self._warning_full_text = ""
         self._right_show_weather = True
         self.right_stack.setCurrentIndex(0)
-        content.addWidget(self.right_stack, stretch=0)
+        content.addWidget(self.right_stack)
 
     def _show_weather(self):
         self._right_show_weather = True
@@ -679,6 +686,9 @@ class IslandWindow(QWidget):
         self.right_stack.setVisible(width >= s(self.HIDE_WEATHER_WIDTH))
         self.course_panel.setVisible(width >= s(self.HIDE_COURSE_WIDTH))
         self._layout_warning_overlay()
+        # 先完成布局，再把时间绝对定位到正中央
+        self.content_widget.layout().activate()
+        self._recenter_time()
         self._update_course_elide()
         self._update_weather_fit()
 
