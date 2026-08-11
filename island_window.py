@@ -23,7 +23,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QLabel, QFrame, QHBoxLayout, QVBoxLayout, QGridLayout,
-    QGraphicsOpacityEffect, QSizePolicy, QApplication,
+    QGraphicsOpacityEffect, QSizePolicy, QApplication, QStackedWidget,
 )
 
 import utils
@@ -317,8 +317,6 @@ class IslandWindow(QWidget):
         self._course_full_text = "今日无课程安排"
         self._warnings = []
         self._weather_data = None
-        self._info_items = []
-        self._info_index = 0
 
         # 鼠标靠近自动隐藏（默认开启）
         self._hover_hide = bool(config.get("hover_hide", True))
@@ -458,11 +456,70 @@ class IslandWindow(QWidget):
         self.center_group.setFixedSize(self.center_group.sizeHint())
 
     # ------------------------------------------------------------------
-    #  右：温度
+    #  右：天气/AQI 与 预警 轮播
     # ------------------------------------------------------------------
     def _build_weather_section(self, content):
-        self.weather_display = WeatherDisplay(self.content_widget)
-        content.addWidget(self.weather_display, stretch=0)
+        # 右侧用 QStackedWidget：天气/AQI 与 预警 二选一，保证绝不重叠
+        self.right_stack = QStackedWidget(self.content_widget)
+        self.right_stack.setStyleSheet(
+            "QStackedWidget { border: none; background: transparent; }")
+        self.right_stack.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        self.weather_display = WeatherDisplay(self.right_stack)
+        self.warning_badge = QLabel("", self.right_stack)
+        self.warning_badge.setFont(make_font(FONT_MAIN, bold=True))
+        self.warning_badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.warning_badge.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+
+        self.right_stack.addWidget(self.weather_display)
+        self.right_stack.addWidget(self.warning_badge)
+
+        self._warning_full_text = ""
+        self._right_show_weather = True
+        self.right_stack.setCurrentIndex(0)
+        content.addWidget(self.right_stack, stretch=0)
+
+    def _show_weather(self):
+        self._right_show_weather = True
+        self.right_stack.setCurrentIndex(0)
+        self.right_stack.show()
+        self._update_weather_fit()
+
+    def _show_warning(self):
+        if not self._warnings:
+            self._show_weather()
+            return
+        self._right_show_weather = False
+        w = self._warnings[0]
+        color = w.get("color_hex") or warning_color_hex(w.get("color"))
+        title = w.get("title") or "".join(
+            [w.get("typeName", ""), w.get("level", "")]) or "天气预警"
+        self._warning_full_text = "预警 · %s" % title
+        self.warning_badge.setStyleSheet("color: %s; background: transparent;" % color)
+        self.right_stack.setCurrentIndex(1)
+        self.right_stack.show()
+        self._update_warning_elide()
+
+    def _rotate_right(self):
+        """右侧信息轮播：有预警时在 天气/AQI 与 预警 之间轮流显示。"""
+        if self._warnings:
+            if self._right_show_weather:
+                self._show_warning()
+            else:
+                self._show_weather()
+        else:
+            self._show_weather()
+
+    def _update_warning_elide(self, avail=0):
+        if not hasattr(self, "warning_badge") or not self.warning_badge.isVisible():
+            return
+        if avail <= 0:
+            # 布局未就绪时不截断，保留完整文字
+            self.warning_badge.setText(self._warning_full_text)
+            return
+        fm = QFontMetricsF(self.warning_badge.font())
+        self.warning_badge.setText(
+            fm.elidedText(self._warning_full_text, Qt.ElideRight, avail))
 
     # ------------------------------------------------------------------
     #  预警浮层（右上角）
@@ -543,11 +600,11 @@ class IslandWindow(QWidget):
         self._hover_timer.timeout.connect(self._check_hover_hide)
         self._hover_timer.start()
 
-        # 左侧信息轮播：课程 / 预警 / 天气 轮流显示，避免互相遮挡
-        self._info_timer = QTimer(self)
-        self._info_timer.setInterval(5000)
-        self._info_timer.timeout.connect(self._rotate_info)
-        self._info_timer.start()
+        # 右侧信息轮播：天气/AQI 与 预警 轮流显示
+        self._right_timer = QTimer(self)
+        self._right_timer.setInterval(5000)
+        self._right_timer.timeout.connect(self._rotate_right)
+        self._right_timer.start()
 
     # ==================================================================
     #  鼠标靠近自动隐藏
@@ -591,16 +648,22 @@ class IslandWindow(QWidget):
         return utils.get_screen(self._screen_index)
 
     def calculate_island_geometry(self):
-        """全屏宽 + 固定高度：width = 屏幕可用宽度，height = 40 × DPI。"""
+        """灵动岛几何：全屏模式占满整行，窗口模式按宽度比例水平居中。"""
         screen = self.current_screen()
         if screen is None:
             return QRect(0, 0, s(1000), s(self.NAV_HEIGHT))
         available = screen.availableGeometry()
         dpi = screen.logicalDotsPerInch()
         scale = dpi / 96.0
-        width = available.width()
         height = int(self.NAV_HEIGHT * scale)
-        return QRect(available.x(), available.y(), width, height)
+        if self._fullscreen:
+            width = available.width()
+            x = available.x()
+        else:
+            ratio = max(0.5, min(1.0, self._width_ratio))
+            width = int(available.width() * ratio)
+            x = available.x() + (available.width() - width) // 2
+        return QRect(x, available.y(), width, height)
 
     def apply_geometry(self):
         self.setGeometry(self.calculate_island_geometry())
@@ -613,28 +676,34 @@ class IslandWindow(QWidget):
         if not hasattr(self, "content_widget"):
             return
         width = self.width()
-        self.weather_display.setVisible(width >= s(self.HIDE_WEATHER_WIDTH))
+        self.right_stack.setVisible(width >= s(self.HIDE_WEATHER_WIDTH))
         self.course_panel.setVisible(width >= s(self.HIDE_COURSE_WIDTH))
         self._layout_warning_overlay()
         self._update_course_elide()
         self._update_weather_fit()
 
     def _update_weather_fit(self):
-        """右模块防遮挡：可用宽度不足时先压缩（去掉 AQI），再整体隐藏。"""
-        if not hasattr(self, "weather_display") or not self.weather_display.isVisible():
+        """右模块防遮挡：可用宽度不足时先压缩天气（去掉 AQI），预警文字省略号截断。"""
+        if not hasattr(self, "right_stack"):
             return
         right_avail = self.content_widget.width() - (
             self.center_group.x() + self.center_group.width()) - s(16)
-        full = self.weather_display.full_width()
-        compact = self.weather_display.compact_width()
-        if full <= right_avail:
-            self.weather_display.set_compact(False)
-            self.weather_display.setVisible(True)
-        elif compact <= right_avail:
-            self.weather_display.set_compact(True)
-            self.weather_display.setVisible(True)
-        else:
-            self.weather_display.setVisible(False)
+        if right_avail <= 0:
+            return   # 布局尚未就绪，保持当前状态
+        if self.right_stack.currentIndex() == 0:
+            full = self.weather_display.full_width()
+            compact = self.weather_display.compact_width()
+            if full <= right_avail:
+                self.weather_display.set_compact(False)
+                self.right_stack.show()
+            elif compact <= right_avail:
+                self.weather_display.set_compact(True)
+                self.right_stack.show()
+            else:
+                self.right_stack.hide()   # 空间实在不够，整个右侧隐藏
+        elif self.right_stack.currentIndex() == 1:
+            self.right_stack.show()
+            self._update_warning_elide(right_avail)
 
     def _connect_screen_signals(self):
         """监听屏幕增删 / 分辨率变更 / DPI 变更，自动重新适配。"""
@@ -662,80 +731,38 @@ class IslandWindow(QWidget):
         self.date_label.setText("%02d-%02d %s" % (now.month, now.day, WEEKDAY_CN2[now.weekday()]))
 
     def update_course(self):
+        """左侧课程信息固定显示（不参与轮播）。"""
         if hasattr(self, "_course_fade"):
             self._course_fade.start()
-        self._rebuild_info_items()
-        self._show_current_info()
-
-    def _rebuild_info_items(self):
-        """重建左侧轮播候选：课程 / 预警 / 天气详情。"""
-        items = []
         colors = theme_colors()
-
-        # 1. 课程候选
         status = self.course_manager.current_status()
         current = status.get("current")
         next_course = status.get("next")
+
         if status.get("empty"):
-            items.append({"text": "今日无课程安排", "dot": colors["success"], "breathe": False})
+            self._set_course_text("今日无课程安排", dot=colors["success"], breathe=False)
         elif current:
             name = current.get("name", "")
             teacher = current.get("teacher", "")
             text = "%s · %s" % (name, teacher) if teacher else name
-            items.append({"text": "正在上课 · %s" % text, "dot": colors["primary"], "breathe": True})
+            self._set_course_text("正在上课 · %s" % text, dot=colors["primary"], breathe=True)
         elif next_course and status.get("preview"):
-            items.append({
-                "text": "下一节 · %s（%d分钟后）" % (next_course.get("name", ""), status["next_minutes"]),
-                "dot": colors["danger"], "breathe": True})
+            self._set_course_text(
+                "下一节 · %s（%d分钟后）" % (next_course.get("name", ""), status["next_minutes"]),
+                dot=colors["danger"], breathe=True)
         elif next_course:
-            items.append({
-                "text": "休息中 · 下一节 %s %s" % (next_course.get("name", ""), next_course.get("start", "")),
-                "dot": colors["text_secondary"], "breathe": False})
+            self._set_course_text(
+                "休息中 · 下一节 %s %s" % (next_course.get("name", ""), next_course.get("start", "")),
+                dot=colors["text_secondary"], breathe=False)
         else:
-            items.append({"text": "今日课程已结束", "dot": colors["text_secondary"], "breathe": False})
+            self._set_course_text("今日课程已结束", dot=colors["text_secondary"], breathe=False)
 
-        # 2. 预警候选（有预警才加入轮播，颜色按预警等级）
-        warnings = self._warnings
-        if warnings:
-            w = warnings[0]
-            color = w.get("color_hex") or warning_color_hex(w.get("color"))
-            title = w.get("title") or "".join(
-                [w.get("typeName", ""), w.get("level", "")]) or "天气预警"
-            items.append({"text": "预警 · %s" % title, "dot": color, "breathe": True})
-
-        # 3. 天气详情候选（有天气数据才加入）
-        wd = self._weather_data
-        if wd:
-            parts = [wd.get("text", ""), "%s°C" % wd.get("temp", "--")]
-            air = wd.get("air")
-            if air and air.get("aqi") not in (None, "--"):
-                parts.append("AQI %s" % air.get("aqi"))
-            items.append({"text": " ".join(parts),
-                          "dot": colors["text_secondary"], "breathe": False})
-
-        self._info_items = items
-        if self._info_index >= len(items):
-            self._info_index = 0
-
-    def _show_current_info(self):
-        if not self._info_items:
-            return
-        idx = min(self._info_index, len(self._info_items) - 1)
-        item = self._info_items[idx]
-        self._course_full_text = item["text"]
+    def _set_course_text(self, text, dot, breathe):
+        self._course_full_text = text
         self.course_dot.setStyleSheet(
-            "background: %s; border-radius: %dpx;" % (item["dot"], s(3)))
-        self._set_breathing(item["breathe"])
+            "background: %s; border-radius: %dpx;" % (dot, s(3)))
+        self._set_breathing(breathe)
         self._update_course_elide()
-
-    def _rotate_info(self):
-        """轮播下一项信息，并触发淡入。"""
-        if not self._info_items:
-            return
-        self._info_index = (self._info_index + 1) % len(self._info_items)
-        if hasattr(self, "_course_fade"):
-            self._course_fade.start()
-        self._show_current_info()
 
     def _update_course_elide(self):
         """左侧文字按与中心时钟的实际间距省略号截断，确保不遮挡时间。"""
@@ -757,14 +784,18 @@ class IslandWindow(QWidget):
         self._warnings = data.get("warnings", []) or []
         self._weather_data = data
         self.weather_display.set_weather(data)
-        self.update_course()
+        # 右侧回到天气显示，由轮播定时器切换
+        self._right_show_weather = True
+        self.right_stack.setCurrentIndex(0)
         self._update_weather_fit()
 
     def _on_weather_failed(self, info):
         self._weather_data = info.get("cached")
         self._warnings = (self._weather_data or {}).get("warnings", []) or []
         self.weather_display.set_error(info.get("cached"), info.get("message", ""))
-        self.update_course()
+        self._right_show_weather = True
+        self.right_stack.setCurrentIndex(0)
+        self._update_weather_fit()
         self._shake_anim.start()
 
     # ==================================================================
@@ -873,8 +904,10 @@ class IslandWindow(QWidget):
             self.setWindowOpacity(self._opacity)
 
     def set_width_ratio(self, ratio):
-        # 顶部导航栏固定全宽，宽度比例不再生效（仅保留兼容接口）
+        """设置灵动岛宽度比例（窗口模式下生效），实时调整几何。"""
         self._width_ratio = float(ratio)
+        if self.isVisible():
+            self.apply_geometry()
 
     def set_screen_index(self, index):
         self._screen_index = index
@@ -891,13 +924,29 @@ class IslandWindow(QWidget):
         return self._fullscreen
 
     def set_pass_through(self, enabled):
-        """鼠标穿透：开启后整个导航栏忽略鼠标事件（仅保留双击关闭热键）。"""
+        """鼠标穿透：开启后整个灵动岛窗口对鼠标事件透明（Windows WS_EX_TRANSPARENT）。"""
         self._pass_through = bool(enabled)
         for widget in self.findChildren(QWidget):
             widget.setAttribute(Qt.WA_TransparentForMouseEvents, self._pass_through)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, self._pass_through)
+        self._apply_click_through()
 
     def is_pass_through(self):
         return self._pass_through
+
+    def _apply_click_through(self):
+        """Windows 窗口级鼠标穿透：设置 WS_EX_TRANSPARENT 扩展样式。"""
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)  # GWL_EXSTYLE
+            if self._pass_through:
+                style |= 0x00000020    # WS_EX_TRANSPARENT
+            else:
+                style &= ~0x00000020
+            ctypes.windll.user32.SetWindowLongW(hwnd, -20, style)
+        except Exception:
+            pass
 
     # ==================================================================
     #  事件处理
@@ -910,3 +959,4 @@ class IslandWindow(QWidget):
         super().showEvent(event)
         enable_acrylic(self, theme_colors()["acrylic_abgr"])
         self.apply_geometry()
+        self._apply_click_through()

@@ -150,6 +150,8 @@ class AdminWindow(QMainWindow):
         self.stack.setCurrentIndex(index)
         if index == 0:
             self._refresh_dashboard()
+        elif index == 2:
+            self._sync_island_controls()
         elif index == 3:
             self._update_weather_status()
         elif index == 4:
@@ -491,6 +493,22 @@ class AdminWindow(QMainWindow):
         self._width_value.setText("%d%%" % value)
         if self.island is not None:
             self.island.set_width_ratio(value / 100.0)
+
+    def _sync_island_controls(self):
+        """把灵动岛实际状态同步到开关控件（可能被托盘菜单改动）。"""
+        if not hasattr(self, "fullscreen_switch"):
+            return
+        if self.island is None:
+            return
+        self.fullscreen_switch.blockSignals(True)
+        self.fullscreen_switch.set_checked_animated(self.island.is_fullscreen())
+        self.fullscreen_switch.blockSignals(False)
+        self.passthrough_switch.blockSignals(True)
+        self.passthrough_switch.set_checked_animated(self.island.is_pass_through())
+        self.passthrough_switch.blockSignals(False)
+        self.hover_switch.blockSignals(True)
+        self.hover_switch.set_checked_animated(self.island.hover_hide_enabled())
+        self.hover_switch.blockSignals(False)
 
     def _on_fullscreen_toggled(self, checked):
         if self.island is not None:
