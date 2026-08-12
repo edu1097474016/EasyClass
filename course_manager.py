@@ -8,12 +8,15 @@
 #   · 周一~周日七天数据，字典键与 JSON 结构一一对应
 # ==========================================================================
 
+import logging
 import os
 from datetime import datetime, date
 
 from PySide6.QtCore import QObject, Signal
 
 from utils import data_file, load_json, save_json
+
+logger = logging.getLogger(__name__)
 
 
 class CourseManager(QObject):
@@ -46,11 +49,15 @@ class CourseManager(QObject):
         for key in self.DAY_KEYS:
             courses = raw.get(key, [])
             self.data[key] = [c for c in courses if isinstance(c, dict)] if isinstance(courses, list) else []
+        logger.info("课程表已加载: %s（共 %d 节课）", self.path,
+                    sum(len(v) for v in self.data.values()))
 
     def save(self):
         """保存到 schedule.json 并广播变更信号。"""
         save_json(self.path, self.data)
         self.changed.emit()
+        logger.info("课程表已保存: %s（共 %d 节课）", self.path,
+                    sum(len(v) for v in self.data.values()))
 
     # ------------------------------------------------------------------
     #  数据访问

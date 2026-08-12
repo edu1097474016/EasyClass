@@ -16,6 +16,7 @@
 
 import sys
 import logging
+import logging.handlers
 import os
 
 from PySide6.QtCore import Qt
@@ -32,15 +33,28 @@ from settings_dialog import ScheduleEditor
 
 
 def setup_logging():
-    """日志写入 data/logs/app.log。"""
+    """日志写入 data/logs/app.log（滚动文件）+ 控制台；只记录 WARNING 及以上（报错）信息。"""
     utils.ensure_data_dir()
     log_path = os.path.join(utils.LOG_DIR, "app.log")
-    logging.basicConfig(
-        filename=log_path,
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        encoding="utf-8",
-    )
+    logger = logging.getLogger()
+    logger.setLevel(logging.WARNING)   # 只记录报错，避免详细日志刷屏
+    logger.handlers.clear()
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    logger.addHandler(file_handler)
+
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    logger.addHandler(console)
+
+    def excepthook(exc_type, exc_value, exc_tb):
+        logger.critical("未捕获异常", exc_info=(exc_type, exc_value, exc_tb))
+
+    sys.excepthook = excepthook
 
 
 def main():
@@ -48,11 +62,15 @@ def main():
     utils.ensure_data_dir()
     utils.migrate_old_files()
     setup_logging()
-    logging.info("易课 EasyClass 启动")
+    logging.info("易课 EasyClass 启动 | 数据目录: %s", utils.DATA_DIR)
 
     # ---------- 3. 配置文件检查 ----------
     utils.ensure_config_files()
     config = utils.load_config()
+    logging.info("配置已加载: 主题=%s 城市=%s 自动定位=%s 材质=%s 宽度比例=%s",
+                 config.get("theme"), config.get("weather_city", "北京"),
+                 config.get("auto_locate"), config.get("island_material", "frosted"),
+                 config.get("island_width_ratio", 1.0))
 
     # ---------- 4. 应用初始化 ----------
     app = QApplication(sys.argv)
@@ -61,9 +79,11 @@ def main():
     app.setQuitOnLastWindowClosed(False)   # 无窗口时保持托盘运行
     app.setStyle("Fusion")                 # 保证 QSS 在跨平台一致渲染
     utils.install_button_press_animation(app)   # 按钮按下滑动动画
+    logging.info("QApplication 初始化完成")
 
     # 应用已导入的自定义字体（永久保存在 data/fonts/）
-    utils.apply_saved_font(config.get("custom_font_file", ""))
+    font_ok = utils.apply_saved_font(config.get("custom_font_file", ""))
+    logging.info("自定义字体应用: %s 文件=%s", font_ok, config.get("custom_font_file", "无"))
 
     # 应用图标
     from icon_drawer import IconDrawer
@@ -73,18 +93,23 @@ def main():
 
     # ---------- 5. 主题管理 ----------
     theme = ThemeManager(app, config)
+    logging.info("主题初始化: %s 主色=%s", theme.current_theme, theme.current_primary())
 
     # ---------- 6. 课程表管理 ----------
     courses = CourseManager()
+    logging.info("课程表已加载: %s 共 %d 天有课", courses.path,
+                 sum(1 for k in courses.DAY_KEYS if courses.data.get(k)))
 
     # ---------- 7. 天气管理 ----------
     weather = WeatherManager(config)
+    logging.info("天气管理器初始化: 提供商=%s host=%s", "hefeng", config.get("api_host"))
 
     # ---------- 8. 灵动岛主窗口（默认隐藏） ----------
     island = IslandWindow(theme, courses, weather, config)
     # 天气数据 → 灵动岛（修复：原先未连接导致岛窗天气不更新）
     weather.updated.connect(island._on_weather)
     weather.failed.connect(island._on_weather_failed)
+    logging.info("灵动岛窗口创建完成，信号已连接")
 
     # ---------- 9. 回调函数 ----------
     def open_editor():
@@ -125,12 +150,29 @@ def main():
     weather.start()          # 立即刷新 + 30 分钟自动更新
     island.update_time()
     island.update_course()
+    logging.info("启动定时器已开启：天气/课程/时钟")
 
     # ---------- 13. 启动即显示灵动岛（从顶部非线性滑入到位） ----------
     island.slide_in()
+    logging.info("灵动岛已滑入显示")
 
-    # ---------- 14. 退出清理 ----------
+    # ---------- 14. 首次启动：提示填写天气 API 与课程信息（data/config.json 标记） ----------
+    if not config.get("welcome_done", False):
+        config["welcome_done"] = True
+        utils.save_config(config)
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(
+            None, "欢迎使用 易课 EasyClass",
+            "首次使用，请先完成基础设置：\n\n"
+            "1. 天气：在「设置 → 天气」中填入和风天气 API Key\n"
+            "2. 课程表：在「设置 → 课程表」中编辑或导入课表\n\n"
+            "完成后灵动岛会自动显示课程、倒计时、天气与预警。",
+            QMessageBox.Ok)
+        open_settings()
+
+    # ---------- 15. 退出清理 ----------
     app.aboutToQuit.connect(weather.stop)
+    logging.info("程序主循环启动，常驻后台运行")
 
     return app.exec()
 

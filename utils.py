@@ -15,6 +15,7 @@ import json
 import re
 import shutil
 import ctypes
+import logging
 
 from PySide6.QtCore import (
     Qt, QRect, QPoint, QObject, QEvent, Signal, Property,
@@ -242,6 +243,7 @@ def load_config():
         "hover_hide": True,
         "hover_hide_margin": 60,
         "hover_hide_interval": 100,
+        "autostart": False,
         "custom_font_file": "",
         "course_progress_height": 3,
         "hitokoto_category": "",
@@ -328,6 +330,59 @@ def disable_acrylic(window):
         _set_accent_state(hwnd, 0, 0, 0)
     except Exception:
         pass
+
+
+# ==========================================================================
+#  开机自启动（Windows 注册表 Run 项）
+# ==========================================================================
+
+_AUTOSTART_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _autostart_command():
+    """构造开机自启动命令：pythonw.exe + main.py（无控制台窗口）。"""
+    import sys as _sys
+    exe = _sys.executable
+    if exe.lower().endswith("python.exe"):
+        pythonw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+        if os.path.exists(pythonw):
+            exe = pythonw
+    main_py = os.path.join(BASE_DIR, "main.py")
+    return '"%s" "%s"' % (exe, main_py)
+
+
+def autostart_enabled():
+    """查询开机自启动是否已启用（读取注册表 Run 项）。"""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_RUN_KEY, 0, winreg.KEY_READ)
+        try:
+            value, _ = winreg.QueryValueEx(key, APP_NAME)
+            return bool(value and value.strip())
+        finally:
+            winreg.CloseKey(key)
+    except Exception:
+        return False
+
+
+def set_autostart(enabled):
+    """启用/禁用开机自启动（写入/删除 HKCU Run 注册表项）。"""
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _AUTOSTART_RUN_KEY, 0, winreg.KEY_SET_VALUE)
+        try:
+            if enabled:
+                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, _autostart_command())
+            else:
+                try:
+                    winreg.DeleteValue(key, APP_NAME)
+                except FileNotFoundError:
+                    pass
+        finally:
+            winreg.CloseKey(key)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("开机自启动设置失败: %s", exc)
 
 
 def paint_round_rect(painter, rect, radius, color, width=1):

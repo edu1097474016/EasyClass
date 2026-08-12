@@ -9,6 +9,8 @@
 #   · 左键单击：显示/隐藏灵动岛（滑入滑出动画）
 # ==========================================================================
 
+import logging
+
 from PySide6.QtCore import Qt, QObject
 from PySide6.QtGui import QIcon, QGuiApplication, QAction
 from PySide6.QtWidgets import (
@@ -19,6 +21,8 @@ import utils
 from utils import APP_NAME, APP_VERSION, APP_TAG
 from icon_drawer import IconDrawer
 from settings_dialog import show_toast
+
+logger = logging.getLogger(__name__)
 
 
 class TrayIcon(QSystemTrayIcon):
@@ -160,6 +164,7 @@ class TrayIcon(QSystemTrayIcon):
                 text = data.get("text", "")
                 suffix = " %s" % text if text else ""
                 show_toast("天气刷新成功：%s %s°C%s" % (city, temp, suffix))
+                logger.info("托盘手动刷新天气成功: %s %s°C", city, temp)
             except Exception:
                 pass
 
@@ -168,6 +173,7 @@ class TrayIcon(QSystemTrayIcon):
             try:
                 show_toast("天气刷新失败：%s" % info.get("message", "网络异常"),
                            success=False)
+                logger.warning("托盘手动刷新天气失败: %s", info.get("message", "网络异常"))
             except Exception:
                 pass
 

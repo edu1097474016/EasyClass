@@ -11,10 +11,13 @@
 #   · 注：GeoAPI 可能被账号安全限制拦截，故 LocationID 用内置城市表兜底
 # ==========================================================================
 
+import logging
 import time
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QThread, Signal, QTimer
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
@@ -229,6 +232,7 @@ class WeatherWorker(QThread):
         """在工作线程内依次获取定位与各类天气数据。"""
         try:
             if not self.api_key or "请填写" in self.api_key or "你的API密钥" in self.api_key:
+                logger.warning("天气刷新失败：未配置 API Key")
                 self.fail.emit({"message": "未配置API密钥"})
                 return
 
@@ -240,14 +244,17 @@ class WeatherWorker(QThread):
                 lat, lon = located["lat"], located["lon"]
                 if not city_name:
                     city_name = located.get("city", "")
+                logger.info("天气定位成功(IP): 城市=%s 经纬度=%s,%s", city_name, lat, lon)
 
             if lat is None:
                 loc = self._city_lookup(self.city)
                 if not loc:
+                    logger.warning("天气刷新失败：未收录城市 %s", self.city)
                     self.fail.emit({"message": "未收录城市：%s，请在天气设置中重新指定" % self.city})
                     return
                 lat, lon = loc["lat"], loc["lon"]
                 city_name = city_name or self.city
+                logger.info("天气定位成功(城市表): 城市=%s 经纬度=%s,%s", city_name, lat, lon)
 
             # 2. 城市 → LocationID（内置表兜底，缺省用北京）
             city_loc = self._city_lookup(city_name) or self._city_lookup(self.city)
@@ -259,9 +266,13 @@ class WeatherWorker(QThread):
             # 3. 实时天气
             now = self._get(self.NOW_PATH, {"location": location_param})
             if not now or now.get("code") != "200" or "now" not in now:
+                logger.warning("天气查询失败: %s", self._last_error or "未知错误")
                 self.fail.emit({"message": "天气查询失败：%s" % (self._last_error or "未知错误")})
                 return
             now_data = now["now"]
+            logger.info("实时天气: %s %s°C 体感%s°C 湿度%s%%",
+                        now_data.get("text", "?"), now_data.get("temp", "?"),
+                        now_data.get("feelsLike", "?"), now_data.get("humidity", "?"))
 
             # 4. 空气质量 / 预警（按经纬度，失败不阻塞主流程）
             air = self._get(self.AIR_PATH.format(lat=lat, lon=lon), {})
@@ -443,6 +454,7 @@ class WeatherManager(QObject):
         self._worker.ok.connect(self._on_ok)
         self._worker.fail.connect(self._on_fail)
         self._worker.start()
+        logger.info("天气刷新已发起: 城市=%s 自动定位=%s", self.city, self.auto_locate)
 
     def update_config(self, config):
         """设置/天气页保存后更新配置并立刻刷新。"""
@@ -451,6 +463,7 @@ class WeatherManager(QObject):
         self.city = config.get("weather_city", "北京")
         self.api_host = config.get("api_host", "https://api.qweather.com")
         self.auto_locate = bool(config.get("auto_locate", True))
+        logger.info("天气配置已更新: 城市=%s 自动定位=%s", self.city, self.auto_locate)
         self.refresh()
 
     # ------------------------------------------------------------------
@@ -460,12 +473,17 @@ class WeatherManager(QObject):
         """请求成功：仅保留在内存，广播实时数据（不再写缓存文件）。"""
         self.cache = data
         data["cached"] = False
+        logger.info("天气刷新成功: %s %s°C %s | 预警%d条 | AQI=%s",
+                    data.get("city", "?"), data.get("temp", "?"),
+                    data.get("text", "?"), len(data.get("warnings") or []),
+                    (data.get("air") or {}).get("aqi", "-"))
         self.updated.emit(data)
 
     def _on_fail(self, info):
         """请求失败：进入冷却、不携带任何缓存兜底，直接广播真实错误。"""
         self._cooldown_until = time.time() + 60
         self.cache = None
+        logger.warning("天气刷新失败: %s（60 秒冷却）", info.get("message", "网络异常"))
         self.failed.emit({
             "cached": None,
             "message": info.get("message", "网络异常"),

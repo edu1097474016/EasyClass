@@ -11,10 +11,11 @@
 #   · 屏幕热插拔 / 分辨率 / DPI 变更自动重新适配（多显示器独立适配）
 # ==========================================================================
 
+import logging
 from datetime import datetime
 
 from PySide6.QtCore import (
-    Qt, QRect, QPoint, QRectF,
+    Qt, QRect, QPoint, QRectF, QObject, QEvent,
     Property, QTimer, QPropertyAnimation, QEasingCurve, QAbstractAnimation,
     QSize,
 )
@@ -32,6 +33,8 @@ from utils import s, make_font, make_blur, enable_acrylic, disable_acrylic
 from icon_drawer import IconDrawer
 from course_manager import CourseManager
 from weather_manager import aqi_color, warning_color_hex
+
+logger = logging.getLogger(__name__)
 
 WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 WEEKDAY_CN2 = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -107,6 +110,19 @@ class DigitalTimeLabel(QWidget):
         painter.drawText(rect, Qt.AlignCenter, self._text)
         painter.restore()
         painter.end()
+
+
+class _CourseResizeFilter(QObject):
+    """事件过滤器：课程面板尺寸变化（换屏/缩放）时实时重居中一言。"""
+
+    def __init__(self, island, parent=None):
+        super().__init__(parent)
+        self._island = island
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Resize:
+            self._island._recenter_hitokoto()
+        return False
 
 
 class CoursePanel(QFrame):
@@ -663,20 +679,12 @@ class IslandWindow(QWidget):
         self.course_dot.setStyleSheet("background: #22C55E; border-radius: %dpx;" % s(3))
         row.addWidget(self.course_dot)
 
-        # 课间轮播左右箭头（仅课间显示）
-        self.course_prev_btn = self._make_carousel_btn("◀", panel)
-        self.course_prev_btn.clicked.connect(self._carousel_prev)
-        self.course_next_btn = self._make_carousel_btn("▶", panel)
-        self.course_next_btn.clicked.connect(self._carousel_next)
-        row.addWidget(self.course_prev_btn)
-
         # 课程文字（不粗，margin-right 20px）
         self.course_label = QLabel("今日无课程安排", panel)
         self.course_label.setFont(make_font(FONT_MAIN, bold=False))
         self.course_label.setMinimumWidth(0)
         self.course_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         row.addWidget(self.course_label)
-        row.addWidget(self.course_next_btn)
 
         content.addWidget(panel)
         self.course_panel = panel
@@ -686,23 +694,10 @@ class IslandWindow(QWidget):
         panel.setGraphicsEffect(self._course_effect)
         self._course_effect.setOpacity(1.0)
 
-    def _make_carousel_btn(self, text, parent):
-        """课间轮播的小箭头按钮。"""
-        dark = theme_colors()
-        theme = QApplication.instance().property("__theme") or "dark"
-        bg = "rgba(255,255,255,0.12)" if theme == "dark" else "rgba(0,0,0,0.08)"
-        bg_hover = "rgba(255,255,255,0.28)" if theme == "dark" else "rgba(0,0,0,0.16)"
-        btn = QPushButton(text, parent)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setFixedSize(s(16), s(16))
-        btn.setToolTip("手动切换课程预告")
-        btn.setStyleSheet(
-            "QPushButton { background: %s; border: none; border-radius: %dpx;"
-            " color: %s; font-size: 8pt; padding: 0px; }"
-            "QPushButton:hover { background: %s; }"
-            % (bg, s(8), dark["text_secondary"], bg_hover))
-        btn.hide()
-        return btn
+        # 课程面板尺寸变化（文字换屏/窗口缩放）时实时重居中一言
+        if not hasattr(self, "_course_resize_filter"):
+            self._course_resize_filter = _CourseResizeFilter(self)
+        panel.installEventFilter(self._course_resize_filter)
 
     # ------------------------------------------------------------------
     #  中：时钟 + 日期
@@ -866,6 +861,7 @@ class IslandWindow(QWidget):
     def _on_hitokoto_batch(self, quotes):
         """收到一批合格句子：入缓存；当前未显示则立即显示一条。"""
         self._hitokoto_queue.extend(quotes)
+        logger.info("一言缓存 +%d 条（当前缓存 %d 条）", len(quotes), len(self._hitokoto_queue))
         if not self._hitokoto_shown:
             self._show_next_hitokoto()
 
@@ -880,6 +876,7 @@ class IslandWindow(QWidget):
             self._hitokoto_shown = True
             self.hitokoto_label.set_quote(quote)
             self._apply_adaptive_visibility()
+            logger.info("一言显示: %s", (quote.get("hitokoto") or "")[:20])
         else:
             self._hitokoto_shown = False
             self.hitokoto_label.hide()
@@ -1011,6 +1008,7 @@ class IslandWindow(QWidget):
         if material != self._material:
             self._material = material
             self._apply_material()
+            logger.info("灵动岛材质切换: %s", material)
 
     # ==================================================================
     #  屏幕适配（多显示器 / 热插拔）
@@ -1088,8 +1086,8 @@ class IslandWindow(QWidget):
 
     def _recenter_hitokoto(self):
         """把一言绝对定位到课程模块与时间之间居中，两侧留间隙。
-        课程模块宽度（含课间轮播换屏）变化时也自动重新居中；
-        布局未收敛时延后一帧再次校位，保证最终精确居中、不重叠。"""
+        课程面板尺寸变化（换屏/缩放）时由 _CourseResizeFilter 实时重新触发本方法，
+        从而实现跟随课程实际长度的实时居中。"""
         if not getattr(self, "_hitokoto_shown", False):
             return
         h = getattr(self, "hitokoto_label", None)
@@ -1100,14 +1098,9 @@ class IslandWindow(QWidget):
         clock_left = self.center_group.x()
         avail = clock_left - gap - (course_right + gap)
         if avail < s(50):
-            if not getattr(self, "_hitokoto_recenter_pending", False):
-                self._hitokoto_recenter_pending = True
-                QTimer.singleShot(0, self._finish_hitokoto_placement)
+            # 空间暂不足：不隐藏，等待课程面板尺寸变化事件再次触发定位
             return
         self._position_hitokoto(course_right, avail)
-        if not getattr(self, "_hitokoto_recenter_pending", False):
-            self._hitokoto_recenter_pending = True
-            QTimer.singleShot(0, self._finish_hitokoto_placement)
 
     def _position_hitokoto(self, course_right, avail):
         h = self.hitokoto_label
@@ -1120,24 +1113,6 @@ class IslandWindow(QWidget):
         h.move(x, y)
         h._update_elided()
         h.show()
-
-    def _finish_hitokoto_placement(self):
-        """布局收敛后的最终校位：仍放不下则隐藏并恢复课程空间。"""
-        self._hitokoto_recenter_pending = False
-        if not getattr(self, "_hitokoto_shown", False):
-            return
-        h = getattr(self, "hitokoto_label", None)
-        gap = s(10)
-        course_right = self.course_panel.x() + self.course_panel.width()
-        clock_left = self.center_group.x()
-        avail = clock_left - gap - (course_right + gap)
-        if h is None or not h._full_text or avail < s(50):
-            if h is not None:
-                h.hide()
-            self._hitokoto_shown = False
-            self._fit_left_modules()
-            return
-        self._position_hitokoto(course_right, avail)
 
     def _connect_screen_signals(self):
         """监听屏幕增删 / 分辨率变更 / DPI 变更，自动重新适配。"""
@@ -1172,7 +1147,14 @@ class IslandWindow(QWidget):
     def update_course(self):
         """课程显示核心：根据状态机刷新左侧课程信息。"""
         status = self.course_manager.current_status()
+        old_status = self._cstatus.get("status") if self._cstatus else None
         self._cstatus = status
+        if status.get("status") != old_status:
+            logger.info("课程状态切换: %s -> %s（当前课=%s 下一节=%s 倒计时=%s秒）",
+                        old_status, status.get("status"),
+                        (status.get("current") or {}).get("name", "无"),
+                        (status.get("next") or {}).get("name", "无"),
+                        status.get("countdown", 0))
 
         colors = theme_colors()
         st = status.get("status")
@@ -1285,18 +1267,23 @@ class IslandWindow(QWidget):
 
     def _update_course_elide(self):
         """左侧文字按与中心时钟的实际间距省略号截断，确保不遮挡时间。
-        已为一言预留的空间（_course_elide_avail）优先使用；课程宽度变化后重新居中一言。"""
+        已为一言预留的空间（_course_elide_avail）优先使用；
+        课程宽度变化后先强制完成布局，再实时重新居中一言（跟随课程长度）。"""
         if not hasattr(self, "course_label"):
             return
-        avail = getattr(self, "_course_elide_avail", 0) or (self.center_group.x() - s(4))
+        reserved = getattr(self, "_course_elide_avail", 0)
+        avail = reserved or (self.center_group.x() - s(4))
         if avail <= 0:
             avail = s(200)
-        # 课间轮播时预留左右箭头的空间
-        if getattr(self, "course_prev_btn", None) is not None and self.course_prev_btn.isVisible():
-            avail -= s(40)
         fm = QFontMetricsF(self.course_label.font())
         elided = fm.elidedText(self._course_full_text, Qt.ElideRight, avail)
         self.course_label.setText(elided)
+        # 强制整条内容布局重新计算（invalidate+activate），
+        # 使课程面板宽度立刻更新为实际长度，再实时重居中一言
+        self.course_label.updateGeometry()
+        lay = self.content_widget.layout()
+        lay.invalidate()
+        lay.activate()
         self._recenter_hitokoto()
 
     # ------------------------------------------------------------------
@@ -1305,16 +1292,13 @@ class IslandWindow(QWidget):
     def _start_carousel(self):
         if len(self._carousel_items) <= 1:
             self._carousel_timer.stop()
-            self._show_carousel_arrows(False)
             return
-        self._show_carousel_arrows(True)
         self._restart_carousel_timer()
 
     def _stop_carousel(self):
         self._carousel_timer.stop()
         self._carousel_items = []
         self._carousel_index = 0
-        self._show_carousel_arrows(False)
 
     def _restart_carousel_timer(self):
         """第 1 屏（下节课+倒计时）停留 5 秒，其余 3 秒。"""
@@ -1351,25 +1335,6 @@ class IslandWindow(QWidget):
             breathe = False
         self._set_course_text(text, dot=dot, breathe=breathe, trigger_fade=trigger_fade)
 
-    def _show_carousel_arrows(self, visible):
-        if hasattr(self, "course_prev_btn"):
-            self.course_prev_btn.setVisible(visible)
-            self.course_next_btn.setVisible(visible)
-
-    def _carousel_prev(self):
-        if not self._carousel_items:
-            return
-        self._carousel_index = (self._carousel_index - 1) % len(self._carousel_items)
-        self._update_carousel_screen(trigger_fade=True)
-        self._restart_carousel_timer()   # 手动切换后暂停 5 秒再自动轮播
-
-    def _carousel_next(self):
-        if not self._carousel_items:
-            return
-        self._carousel_index = (self._carousel_index + 1) % len(self._carousel_items)
-        self._update_carousel_screen(trigger_fade=True)
-        self._restart_carousel_timer()
-
     # ==================================================================
     #  天气更新
     # ==================================================================
@@ -1380,6 +1345,10 @@ class IslandWindow(QWidget):
         self.right_carousel.set_weather(data)
         self.right_carousel.set_warnings(self._warnings)
         self._update_right_fit()
+        logger.info("灵动岛天气更新: %s %s°C %s | 预警%d条 | AQI=%s",
+                    data.get("city", "?"), data.get("temp", "?"),
+                    data.get("text", "?"), len(self._warnings),
+                    (data.get("air") or {}).get("aqi", "-"))
 
     def _on_weather_failed(self, info):
         """天气获取失败：不再回退缓存，直接在灵动岛右侧显示真实错误信息。"""
@@ -1390,6 +1359,7 @@ class IslandWindow(QWidget):
         self.right_carousel.set_warnings([])
         self._update_right_fit()
         self._shake_anim.start()
+        logger.warning("灵动岛天气错误: %s", message)
 
     # ==================================================================
     #  主题切换
@@ -1466,6 +1436,7 @@ class IslandWindow(QWidget):
         anim.setEndValue(target)
         anim.finished.connect(self._on_slide_done)
         anim.start()
+        logger.info("灵动岛滑入显示")
 
     def slide_out(self):
         screen = self.current_screen()
@@ -1482,6 +1453,7 @@ class IslandWindow(QWidget):
         anim.finished.connect(self.hide)
         anim.finished.connect(self._on_slide_done)
         anim.start()
+        logger.info("灵动岛滑出隐藏")
 
     def _on_slide_done(self):
         """滑入/滑出动画结束，清除滑动状态。"""

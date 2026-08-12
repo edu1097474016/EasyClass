@@ -9,7 +9,11 @@
 #   · 失败静默，不影响主界面
 # ==========================================================================
 
+import logging
+
 from PySide6.QtCore import QThread, Signal
+
+logger = logging.getLogger(__name__)
 
 
 class HitokotoFetcher(QThread):
@@ -57,8 +61,12 @@ class HitokotoFetcher(QThread):
                 if acc:
                     got += 1
                     # 逐条推送：第一条尽快显示，其余入缓存
+                    logger.info("一言获取成功(%d/%d): %s", got, self.count,
+                                (acc.get("hitokoto") or "")[:20])
                     self.ok.emit([acc])
-            except Exception:
+            except Exception as exc:
+                logger.warning("一言请求异常: %s", type(exc).__name__)
                 break
         if got == 0:
+            logger.warning("一言获取失败：未取到合格字数的句子（max_len=%d）", self.max_len)
             self.fail.emit("no fit quote")

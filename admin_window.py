@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 import json
+import logging
 
 import utils
 from utils import s, ToggleSwitch
@@ -30,6 +31,8 @@ from weather_manager import WeatherManager
 from settings_dialog import show_toast, ScheduleEditor
 from island_window import IslandWindow
 from icon_drawer import IconDrawer
+
+logger = logging.getLogger(__name__)
 
 # 预设主题色（第一个为默认翠绿色）
 PRESET_COLORS = [
@@ -283,6 +286,13 @@ class AdminWindow(QMainWindow):
         btn_row.addStretch(1)
         cl.addLayout(btn_row)
 
+        cl = self._card(layout, "启动选项")
+        self.autostart_switch = ToggleSwitch()
+        self.autostart_switch.set_checked_animated(utils.autostart_enabled())
+        self.autostart_switch.toggled.connect(self._on_autostart_toggled)
+        self._row(cl, "开机自启动", self.autostart_switch,
+                  "开启后登录 Windows 时自动启动易课（写入注册表 HKCU Run）")
+
         self._refresh_dashboard()
 
     def _refresh_dashboard(self, *_args):
@@ -326,6 +336,18 @@ class AdminWindow(QMainWindow):
         if self.island is not None:
             self.island.toggle_visible()
             self._refresh_dashboard()
+
+    def _on_autostart_toggled(self, checked):
+        """开机自启动开关：写入/删除 Windows 注册表 Run 项并持久化。"""
+        utils.set_autostart(checked)
+        self.config["autostart"] = bool(checked)
+        utils.save_config(self.config)
+        if checked:
+            logger.info("已开启开机自启动: %s", utils._autostart_command())
+            show_toast("已开启开机自启动")
+        else:
+            logger.info("已关闭开机自启动")
+            show_toast("已关闭开机自启动")
 
     def _open_editor(self):
         editor = ScheduleEditor(self.courses, parent=self)
@@ -437,6 +459,8 @@ class AdminWindow(QMainWindow):
         if self.island is not None:
             self.island.set_window_opacity(opacity)
         utils.save_config(self.config)
+        logger.info("外观设置已保存: 透明度=%.0f%% 主题=%s 主题色=%s",
+                    opacity * 100, self.theme.current_theme, self.theme.current_primary())
         show_toast("外观设置已保存")
 
     # ==================================================================
@@ -795,6 +819,9 @@ class AdminWindow(QMainWindow):
             self.island.set_progress_height(self.progress_slider.value())
             self.island.set_hitokoto_refresh(self.hitokoto_refresh_slider.value())
         utils.save_config(self.config)
+        logger.info("灵动岛设置已保存: 宽度=%.0f%% 材质=%s 进度条=%dpx 一言刷新=%d分钟",
+                    ratio * 100, self.config.get("island_material", "frosted"),
+                    self.progress_slider.value(), self.hitokoto_refresh_slider.value())
         show_toast("灵动岛设置已保存")
 
     # ==================================================================
@@ -863,6 +890,9 @@ class AdminWindow(QMainWindow):
         utils.save_config(self.config)
         self.weather.update_config(self.config)
         self._refresh_dashboard()
+        logger.info("天气设置已保存: 城市=%s 自动定位=%s host=%s",
+                    self.config.get("weather_city"), self.config.get("auto_locate"),
+                    self.config.get("api_host"))
         show_toast("天气设置已保存")
 
     def _update_weather_status(self):
@@ -934,6 +964,7 @@ class AdminWindow(QMainWindow):
         btn.setProperty("class", "primary")
         btn.setFixedHeight(s(40))
         btn.clicked.connect(self._open_editor)
+        self.editor_btn = btn
         cl.addWidget(btn)
 
         cl = self._card(layout, "导入课表")
@@ -974,6 +1005,8 @@ class AdminWindow(QMainWindow):
         self.courses.save()
         self._update_schedule_preview()
         self._refresh_dashboard()
+        total = sum(len(v) for v in self.courses.data.values())
+        logger.info("课表文件导入成功: %s（共 %d 节课）", path, total)
         show_toast("课表导入成功")
 
     @staticmethod
