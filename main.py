@@ -7,7 +7,7 @@
 #   2. 加载配置并初始化 QApplication
 #   3. 初始化 ThemeManager（读取主题，应用 QSS）
 #   4. 初始化 CourseManager / WeatherManager
-#   5. 创建灵动岛主窗口（默认隐藏，缩入托盘）
+#   5. 创建灵动岛主窗口（启动后自动从顶部滑入显示）
 #   6. 创建系统托盘图标
 #   7. 注册全局热键 Ctrl+E（编辑课程表）
 #   8. 启动定时器：时间每秒 / 课程每10秒 / 天气每30分钟
@@ -28,7 +28,7 @@ from course_manager import CourseManager
 from weather_manager import WeatherManager
 from island_window import IslandWindow
 from tray_icon import TrayIcon
-from settings_dialog import open_schedule_editor
+from settings_dialog import ScheduleEditor
 
 
 def setup_logging():
@@ -62,6 +62,15 @@ def main():
     app.setStyle("Fusion")                 # 保证 QSS 在跨平台一致渲染
     utils.install_button_press_animation(app)   # 按钮按下滑动动画
 
+    # 应用已导入的自定义字体（永久保存在 data/fonts/）
+    utils.apply_saved_font(config.get("custom_font_file", ""))
+
+    # 应用图标
+    from icon_drawer import IconDrawer
+    app_icon = IconDrawer.app_icon_qicon(64)
+    if app_icon is not None:
+        app.setWindowIcon(app_icon)
+
     # ---------- 5. 主题管理 ----------
     theme = ThemeManager(app, config)
 
@@ -79,8 +88,9 @@ def main():
 
     # ---------- 9. 回调函数 ----------
     def open_editor():
-        """打开课程表编辑器（先密码验证）。"""
-        open_schedule_editor(None, courses, config)
+        """打开课程表编辑器（托盘 / Ctrl+E，无需密码，直接进入编辑）。"""
+        editor = ScheduleEditor(courses, parent=None)
+        editor.exec()
 
     admin_window = {"window": None}
 
@@ -116,7 +126,10 @@ def main():
     island.update_time()
     island.update_course()
 
-    # ---------- 13. 退出清理 ----------
+    # ---------- 13. 启动即显示灵动岛（从顶部非线性滑入到位） ----------
+    island.slide_in()
+
+    # ---------- 14. 退出清理 ----------
     app.aboutToQuit.connect(weather.stop)
 
     return app.exec()

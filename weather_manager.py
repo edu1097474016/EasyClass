@@ -16,8 +16,6 @@ from datetime import datetime
 
 from PySide6.QtCore import QObject, QThread, Signal, QTimer
 
-from utils import data_file, load_json, save_json
-
 
 # ------------------------------------------------------------------
 #  内置城市表：城市名 → LocationID + 经纬度（GeoAPI 不可用时兜底）
@@ -153,28 +151,13 @@ class WeatherWorker(QThread):
     INDICES_TYPES = "1,2,3,5,6"   # 1穿衣 2洗车 3感冒 5运动 6紫外线
     TIMEOUT = 8
 
-    def __init__(self, api_key, city, api_host, auto_locate,
-                 weather_coords="", parent=None):
+    def __init__(self, api_key, city, api_host, auto_locate, parent=None):
         super().__init__(parent)
         self.api_key = (api_key or "").strip()
         self.city = (city or "").strip()
         self.api_host = (api_host or "https://api.qweather.com").strip().rstrip("/")
         self.auto_locate = auto_locate
-        self.weather_coords = (weather_coords or "").strip()
         self._last_error = ""
-
-    @staticmethod
-    def _parse_coords(text):
-        """解析用户填写的经纬度（'纬度,经度'），非法返回 None。"""
-        try:
-            parts = [p.strip() for p in (text or "").split(",")]
-            if len(parts) == 2 and parts[0] and parts[1]:
-                lat, lon = float(parts[0]), float(parts[1])
-                if -90 <= lat <= 90 and -180 <= lon <= 180:
-                    return ("%.4f" % lat, "%.4f" % lon)
-        except (ValueError, TypeError):
-            pass
-        return None
 
     # ------------------------------------------------------------------
     #  HTTP 封装
@@ -249,35 +232,32 @@ class WeatherWorker(QThread):
                 self.fail.emit({"message": "未配置API密钥"})
                 return
 
-            # 1. 定位优先级：手动精确经纬度 > IP 自动定位 > 手动城市名
-            coords = self._parse_coords(self.weather_coords)
-            located = self._auto_locate() if self.auto_locate or (coords and not self.city) else None
+            # 1. 定位：开启自动定位 → 用 IP；关闭 → 用内置城市表
+            located = self._auto_locate() if self.auto_locate else None
             city_name = self.city
             lat = lon = None
-            if coords:
-                lat, lon = coords
-                if not city_name and located:
-                    city_name = located.get("city", "")
-            if lat is None and located:
+            if located:
                 lat, lon = located["lat"], located["lon"]
                 if not city_name:
                     city_name = located.get("city", "")
+
             if lat is None:
                 loc = self._city_lookup(self.city)
                 if not loc:
                     self.fail.emit({"message": "未收录城市：%s，请在天气设置中重新指定" % self.city})
                     return
                 lat, lon = loc["lat"], loc["lon"]
-                if not city_name:
-                    city_name = self.city
+                city_name = city_name or self.city
 
             # 2. 城市 → LocationID（内置表兜底，缺省用北京）
             city_loc = self._city_lookup(city_name) or self._city_lookup(self.city)
             location_id = (city_loc or CITY_LOCATIONS["北京"])["id"]
             city_name = city_name or self.city or "北京"
+            # 有真实经纬度（IP 定位）时，天气/预报/指数直接用 "经度,纬度" 查询，保证位置一致
+            location_param = "%s,%s" % (lon, lat) if lat and lon else location_id
 
             # 3. 实时天气
-            now = self._get(self.NOW_PATH, {"location": location_id})
+            now = self._get(self.NOW_PATH, {"location": location_param})
             if not now or now.get("code") != "200" or "now" not in now:
                 self.fail.emit({"message": "天气查询失败：%s" % (self._last_error or "未知错误")})
                 return
@@ -291,14 +271,14 @@ class WeatherWorker(QThread):
             warnings = self._parse_warnings(warn)
 
             # 5. 预报（失败不阻塞主流程）
-            forecast = self._get(self.FORECAST_PATH, {"location": location_id})
+            forecast = self._get(self.FORECAST_PATH, {"location": location_param})
             daily = forecast.get("daily", []) if forecast and forecast.get("code") == "200" else []
 
-            hourly = self._get(self.HOURLY_PATH, {"location": location_id})
+            hourly = self._get(self.HOURLY_PATH, {"location": location_param})
             hourly_data = hourly.get("hourly", []) if hourly and hourly.get("code") == "200" else []
 
             indices = self._get(self.INDICES_PATH, {
-                "location": location_id, "type": self.INDICES_TYPES})
+                "location": location_param, "type": self.INDICES_TYPES})
             indices_data = indices.get("daily", []) if indices and indices.get("code") == "200" else []
 
             result = {
@@ -425,10 +405,9 @@ class WeatherManager(QObject):
         self.city = self.config.get("weather_city", "北京")
         self.api_host = self.config.get("api_host", "https://api.qweather.com")
         self.auto_locate = bool(self.config.get("auto_locate", True))
-        self.weather_coords = self.config.get("weather_coords", "")
         self._worker = None
         self._cooldown_until = 0.0
-        self.cache = self._load_cache()
+        self.cache = None   # 仅内存保留最近一次成功数据，失败不兜底显示
 
         self.timer = QTimer(self)
         self.timer.setInterval(self.AUTO_REFRESH_MS)
@@ -460,8 +439,7 @@ class WeatherManager(QObject):
         if self._worker is not None and self._worker.isRunning():
             return
         self._worker = WeatherWorker(
-            self.api_key, self.city, self.api_host, self.auto_locate,
-            weather_coords=self.weather_coords)
+            self.api_key, self.city, self.api_host, self.auto_locate)
         self._worker.ok.connect(self._on_ok)
         self._worker.fail.connect(self._on_fail)
         self._worker.start()
@@ -473,40 +451,22 @@ class WeatherManager(QObject):
         self.city = config.get("weather_city", "北京")
         self.api_host = config.get("api_host", "https://api.qweather.com")
         self.auto_locate = bool(config.get("auto_locate", True))
-        self.weather_coords = config.get("weather_coords", "")
         self.refresh()
 
     # ------------------------------------------------------------------
     #  内部回调
     # ------------------------------------------------------------------
     def _on_ok(self, data):
-        """请求成功：写入缓存并广播。"""
+        """请求成功：仅保留在内存，广播实时数据（不再写缓存文件）。"""
         self.cache = data
-        self._save_cache(data)
         data["cached"] = False
         self.updated.emit(data)
 
     def _on_fail(self, info):
-        """请求失败：进入冷却、携带缓存数据广播（岛窗据此展示 '[缓存] ...'）。"""
+        """请求失败：进入冷却、不携带任何缓存兜底，直接广播真实错误。"""
         self._cooldown_until = time.time() + 60
-        cached = dict(self.cache) if self.cache else None
+        self.cache = None
         self.failed.emit({
-            "cached": cached,
+            "cached": None,
             "message": info.get("message", "网络异常"),
         })
-
-    # ------------------------------------------------------------------
-    #  缓存
-    # ------------------------------------------------------------------
-    def cache_path(self):
-        return data_file("weather_cache.json")
-
-    def _load_cache(self):
-        data = load_json(self.cache_path(), None)
-        return data if isinstance(data, dict) else None
-
-    def _save_cache(self, data):
-        try:
-            save_json(self.cache_path(), data)
-        except Exception:
-            pass

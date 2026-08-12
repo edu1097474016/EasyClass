@@ -35,15 +35,17 @@ APP_TAG = "易课 EasyClass v1.0.0 | Silicon UI"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RES_DIR = os.path.join(BASE_DIR, "res")
 
-# 数据目录：配置 / 缓存 / 日志统一写入 data/ 下
+# 数据目录：配置 / 缓存 / 日志 / 字体统一写入 data/ 下
 DATA_DIR = os.path.join(BASE_DIR, "data")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
+FONTS_DIR = os.path.join(DATA_DIR, "fonts")
 
 
 def ensure_data_dir():
-    """创建 data/ 目录（含 logs/ 子目录）。"""
+    """创建 data/ 目录（含 logs/、fonts/ 子目录）。"""
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
+    os.makedirs(FONTS_DIR, exist_ok=True)
 
 
 def data_file(name):
@@ -67,6 +69,57 @@ def migrate_old_files():
                     pass
 
 FONT_FAMILY = "Microsoft YaHei UI"
+
+# 自定义字体（导入的字体文件 → 全局生效的字体系列名）
+CUSTOM_FONT_FAMILY = None
+
+
+def set_custom_font_family(family):
+    """设置全局自定义字体系列名（None 时回退默认微软雅黑）。"""
+    global CUSTOM_FONT_FAMILY
+    CUSTOM_FONT_FAMILY = family or None
+
+
+def custom_font_family():
+    """返回当前生效的字体系列名。"""
+    return CUSTOM_FONT_FAMILY or FONT_FAMILY
+
+
+def load_custom_font_file(font_path):
+    """
+    导入自定义字体文件（.ttf/.otf/.ttc）：
+    复制到 data/fonts/ 持久保存，注册到 Qt，并返回 (family, 持久化相对文件名)。
+    失败返回 None。
+    """
+    try:
+        from PySide6.QtGui import QFontDatabase
+        ensure_data_dir()
+        base = os.path.basename(font_path)
+        dest = os.path.join(FONTS_DIR, base)
+        if not os.path.exists(dest) or not os.path.samefile(font_path, dest):
+            shutil.copyfile(font_path, dest)
+        fid = QFontDatabase.addApplicationFont(dest)
+        if fid < 0:
+            return None
+        families = QFontDatabase.applicationFontFamilies(fid)
+        if not families:
+            return None
+        family = families[0]
+        set_custom_font_family(family)
+        return (family, base)
+    except Exception:
+        return None
+
+
+def apply_saved_font(custom_font_file):
+    """启动时根据 config 中保存的字体文件名应用自定义字体。"""
+    if not custom_font_file:
+        return False
+    path = os.path.join(FONTS_DIR, os.path.basename(custom_font_file))
+    if os.path.exists(path):
+        result = load_custom_font_file(path)
+        return result is not None
+    return False
 
 # ==========================================================================
 #  DPI 与分辨率自适应
@@ -108,8 +161,9 @@ def screen_available(screen=None):
 
 def make_font(size_pt, bold=False):
     """按磅值创建字体，Qt 自动根据 DPI 缩放磅值（字体自适应核心）。
-    支持浮点磅值（如 10.5pt ≈ 14px）。"""
-    font = QFont(FONT_FAMILY)
+    支持浮点磅值（如 10.5pt ≈ 14px）。
+    优先使用用户导入的自定义字体（CUSTOM_FONT_FAMILY）。"""
+    font = QFont(custom_font_family())
     font.setPointSizeF(float(size_pt))
     font.setBold(bold)
     return font
@@ -173,7 +227,6 @@ def load_config():
         "app_version": APP_VERSION,
         "weather_api_key": "请填写你的API密钥",
         "weather_city": "北京",
-        "weather_coords": "",
         "api_host": "https://api.qweather.com",
         "auto_locate": True,
         "opacity": 0.65,
@@ -182,9 +235,19 @@ def load_config():
         "island_width_ratio": 1.0,
         "island_glass_style": "auto",
         "island_glass_custom": "#1E202D",
+        "island_material": "frosted",
+        "island_fullscreen": False,
+        "island_passthrough": False,
+        "island_screen": 0,
+        "hover_hide": True,
+        "hover_hide_margin": 60,
+        "hover_hide_interval": 100,
+        "custom_font_file": "",
+        "course_progress_height": 3,
+        "hitokoto_category": "",
+        "hitokoto_refresh_minutes": 15,
         "theme": "dark",
         "theme_color": "#40916C",
-        "hover_hide": True,
     }
     cfg = load_json(data_file("config.json"), {})
     for key, value in default.items():
@@ -219,16 +282,9 @@ def make_blur(widget, radius=5):
     return effect
 
 
-def enable_acrylic(window, abgr=0xD82D201E):
-    """
-    Windows 10/11 毛玻璃（Acrylic）支持。
-    通过 DWM SetWindowCompositionAttribute 开启背景模糊，
-    失败时静默忽略（仍保留 rgba 半透明玻璃质感）。
-    abgr 参数格式为 0xAABBGGRR。
-    """
+def _set_accent_state(hwnd, state, flags=2, gradient=0):
+    """设置 Windows DWM 毛玻璃状态（4=亚克力模糊，0=关闭）。"""
     try:
-        hwnd = int(window.winId())
-
         class AccentPolicy(ctypes.Structure):
             _fields_ = [
                 ("AccentState", ctypes.c_uint),
@@ -244,9 +300,32 @@ def enable_acrylic(window, abgr=0xD82D201E):
                 ("SizeOfData", ctypes.c_size_t),
             ]
 
-        accent = AccentPolicy(4, 2, abgr, 0)  # 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND
+        accent = AccentPolicy(state, flags, gradient, 0)
         data = WinCompatAttrData(19, ctypes.pointer(accent), ctypes.sizeof(accent))
         ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data))
+    except Exception:
+        pass
+
+
+def enable_acrylic(window, abgr=0xD82D201E):
+    """
+    Windows 10/11 亚克力（Acrylic）材质。
+    通过 DWM SetWindowCompositionAttribute 开启背景模糊，
+    失败时静默忽略（仍保留 rgba 半透明玻璃质感）。
+    abgr 参数格式为 0xAABBGGRR。
+    """
+    try:
+        hwnd = int(window.winId())
+        _set_accent_state(hwnd, 4, 2, abgr)   # 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND
+    except Exception:
+        pass
+
+
+def disable_acrylic(window):
+    """关闭 DWM 亚克力模糊（AccentState=0），用于切回毛玻璃材质。"""
+    try:
+        hwnd = int(window.winId())
+        _set_accent_state(hwnd, 0, 0, 0)
     except Exception:
         pass
 

@@ -357,7 +357,6 @@ class AddCourseDialog(GlassDialog):
 
         self.name_edit = self._make_edit(self._course.get("name", ""), "课程名称（必填）")
         self.teacher_edit = self._make_edit(self._course.get("teacher", ""), "教师姓名")
-        self.room_edit = self._make_edit(self._course.get("room", ""), "教室编号")
 
         self.start_edit = QTimeEdit(self.card)
         self.start_edit.setDisplayFormat("HH:mm")
@@ -368,7 +367,7 @@ class AddCourseDialog(GlassDialog):
 
         for label, widget in (
             ("课程名", self.name_edit), ("教师", self.teacher_edit),
-            ("教室", self.room_edit), ("开始时间", self.start_edit),
+            ("开始时间", self.start_edit),
             ("结束时间", self.end_edit),
         ):
             lbl = _label(label, 13)
@@ -417,7 +416,6 @@ class AddCourseDialog(GlassDialog):
             "end": end,
             "name": name,
             "teacher": self.teacher_edit.text().strip(),
-            "room": self.room_edit.text().strip(),
         }
         self.accept()
 
@@ -469,18 +467,13 @@ class CourseCard(QFrame):
         time_lbl.setStyleSheet("color: %s;" % current_colors()["text_secondary"])
         layout.addWidget(time_lbl)
 
-        # 第三行：教师 + 教室
+        # 第三行：教师
         row3 = QHBoxLayout()
         teacher = course.get("teacher", "")
-        room = course.get("room", "")
         if teacher:
             t_lbl = _label("教师：%s" % teacher, 14)
             t_lbl.setStyleSheet("color: %s;" % current_colors()["primary"])
             row3.addWidget(t_lbl)
-        if room:
-            r_lbl = _label("教室：%s" % room, 14)
-            r_lbl.setStyleSheet("color: %s;" % current_colors()["text_secondary"])
-            row3.addWidget(r_lbl)
         row3.addStretch(1)
         layout.addLayout(row3)
 
@@ -538,7 +531,7 @@ class ScheduleEditor(GlassDialog):
 
     def __init__(self, manager, parent=None):
         super().__init__(parent, card_size=(900, 650), dim_alpha=120,
-                         title="易课 ✦ 编辑课程表")
+                         title="易课 ✦ 编辑课程表(双击即可打开编辑)")
         self.manager = manager
         # 工作副本：未保存前不写入 manager
         self.working = deepcopy(manager.data)

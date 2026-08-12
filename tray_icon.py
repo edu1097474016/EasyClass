@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 import utils
 from utils import APP_NAME, APP_VERSION, APP_TAG
 from icon_drawer import IconDrawer
+from settings_dialog import show_toast
 
 
 class TrayIcon(QSystemTrayIcon):
@@ -46,8 +47,11 @@ class TrayIcon(QSystemTrayIcon):
 
     # ------------------------------------------------------------------
     def _apply_icon(self):
-        color = self.theme.color("text_main")
-        pixmap = IconDrawer.text_icon("易", 64, color=color)
+        # 托盘图标：圆角方形
+        pixmap = IconDrawer.app_icon(64)
+        if pixmap is None:
+            color = self.theme.color("text_main")
+            pixmap = IconDrawer.text_icon("易", 64, color=color)
         self.setIcon(QIcon(pixmap))
 
     def _on_activated(self, reason):
@@ -115,7 +119,7 @@ class TrayIcon(QSystemTrayIcon):
 
         # 刷新天气
         refresh_act = QAction("刷新天气", menu)
-        refresh_act.triggered.connect(self.weather.refresh)
+        refresh_act.triggered.connect(self._refresh_weather)
         menu.addAction(refresh_act)
 
         # 设置
@@ -146,6 +150,45 @@ class TrayIcon(QSystemTrayIcon):
             screen_menu.addAction(act)
 
     # ------------------------------------------------------------------
+    def _refresh_weather(self):
+        """刷新天气并用 Toast 提示结果（成功/失败）。"""
+        def once_ok(data):
+            self._unhook(once_ok, once_fail)
+            try:
+                city = data.get("city", "未知")
+                temp = data.get("temp", "--")
+                text = data.get("text", "")
+                suffix = " %s" % text if text else ""
+                show_toast("天气刷新成功：%s %s°C%s" % (city, temp, suffix))
+            except Exception:
+                pass
+
+        def once_fail(info):
+            self._unhook(once_ok, once_fail)
+            try:
+                show_toast("天气刷新失败：%s" % info.get("message", "网络异常"),
+                           success=False)
+            except Exception:
+                pass
+
+        try:
+            self.weather.updated.connect(once_ok)
+            self.weather.failed.connect(once_fail)
+        except Exception:
+            return
+        self.weather.refresh(force=True)
+
+    def _unhook(self, once_ok, once_fail):
+        """解除本次刷新的一次性连接，避免重复点击造成连接堆积。"""
+        try:
+            self.weather.updated.disconnect(once_ok)
+        except Exception:
+            pass
+        try:
+            self.weather.failed.disconnect(once_fail)
+        except Exception:
+            pass
+
     def _set_opacity(self, value):
         self.config["opacity"] = value
         try:
@@ -159,7 +202,7 @@ class TrayIcon(QSystemTrayIcon):
             None, "关于 易课",
             "<b>%s</b> v%s<br><br>"
             "Silicon UI · 全面自适应灵动岛教室看板<br>"
-            "天气数据来源：和风天气 (dev.qweather.com)<br><br>"
+            "天气数据来源：和风天气 (dev.qweather.com)<br><br>名言数据来源：Hitokoto一言 (hitokoto.cn)<br><br>"
             "易课 EasyClass v1.0.0 | Silicon UI" % (APP_NAME, APP_VERSION))
 
     def _quit(self):

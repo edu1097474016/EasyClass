@@ -11,29 +11,30 @@
 #   · 屏幕热插拔 / 分辨率 / DPI 变更自动重新适配（多显示器独立适配）
 # ==========================================================================
 
-import math
-from datetime import datetime, date
+from datetime import datetime
 
 from PySide6.QtCore import (
     Qt, QRect, QPoint, QRectF,
     Property, QTimer, QPropertyAnimation, QEasingCurve, QAbstractAnimation,
-    QSize, QSizeF,
+    QSize,
 )
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QFontMetricsF, QGuiApplication, QPixmap, QCursor,
+    QPainter, QColor, QFontMetricsF, QGuiApplication, QPixmap, QCursor,
 )
 from PySide6.QtWidgets import (
     QWidget, QLabel, QFrame, QHBoxLayout, QVBoxLayout, QGridLayout,
     QGraphicsOpacityEffect, QSizePolicy, QApplication, QStackedWidget,
+    QPushButton,
 )
 
 import utils
-from utils import s, make_font, make_shadow, make_blur, enable_acrylic
+from utils import s, make_font, make_blur, enable_acrylic, disable_acrylic
 from icon_drawer import IconDrawer
+from course_manager import CourseManager
 from weather_manager import aqi_color, warning_color_hex
 
 WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-WEEKDAY_CN2 = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
+WEEKDAY_CN2 = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 # 统一字号：14px ≈ 10.5pt（Qt 磅值自动按 DPI 缩放）
 FONT_MAIN = 10.5
@@ -43,15 +44,6 @@ def theme_colors():
     theme = QApplication.instance().property("__theme") or "dark"
     from theme_manager import ThemeManager
     return ThemeManager.COLORS.get(theme, ThemeManager.COLORS["dark"])
-
-
-def nav_bar_color(theme=None):
-    """顶部导航栏底色：深色 rgba(30,30,40,0.7) / 浅色 rgba(255,255,255,0.72)。"""
-    if theme is None:
-        theme = QApplication.instance().property("__theme") or "dark"
-    if theme == "light":
-        return "rgba(255, 255, 255, 0.72)"
-    return "rgba(30, 30, 40, 0.7)"
 
 
 # ==========================================================================
@@ -153,73 +145,232 @@ class CoursePanel(QFrame):
         painter.end()
 
 
-class FlipCard(QWidget):
-    """翻牌器：前后两张牌面，绕竖直中轴翻转（宽向缩放 + 牌面切换）。"""
+class RightCarousel(QWidget):
+    """最右侧分段轮播：首段固定为 天气+AQI，其后每段为一条预警；淡入淡出切换。
+    预警文字以最右侧为基准、向右对齐，过长时用省略号截断右端。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._front = QPixmap()
-        self._back = QPixmap()
-        self._flip = 0.0
-        self._on_done = None
-        self._anim = QPropertyAnimation(self, b"flip", self)
-        self._anim.setDuration(420)
-        self._anim.setEasingCurve(QEasingCurve.Type.InOutCubic)   # 非线性缓动
-        self._anim.setStartValue(0.0)
-        self._anim.setEndValue(1.0)
-        self._anim.finished.connect(self._finish)
+        self._warnings = []
+        self._index = 0
+        self._max_width = 1000000
+        self._effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._effect)
+        self._effect.setOpacity(1.0)
+
+        self.weather_display = WeatherDisplay(self)
+        self.warning_label = QLabel("", self)
+        self.warning_label.setFont(make_font(FONT_MAIN, bold=True))
+        self.warning_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.warning_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.weather_display)
+        layout.addWidget(self.warning_label)
+        self.warning_label.hide()
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(5000)
+        self._timer.timeout.connect(self._advance)
+
+        self._fade = QPropertyAnimation(self._effect, b"opacity", self)
+        self._fade.setDuration(300)
+        self._fade.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.hide()
+
+    # ------------------------------------------------------------------
+    #  天气 / 预警数据
+    # ------------------------------------------------------------------
+    def set_weather(self, data):
+        self.weather_display.set_weather(data)
+        self.show()
+
+    def set_error(self, message):
+        self.weather_display.set_error(message)
+        self.show()
+
+    def set_warnings(self, warnings):
+        """设置预警列表并启动分段轮播（首段固定天气+AQI，其后每条预警为一段）。"""
+        self._warnings = list(warnings or [])
+        self._index = 0
+        self._timer.stop()
+        self._effect.setOpacity(1.0)
+        self._apply_segment()
+        self.show()
+        self.updateGeometry()
+        if len(self._warnings) >= 1:
+            self._timer.start()
+
+    def segment_count(self):
+        return 1 + len(self._warnings)
+
+    # ------------------------------------------------------------------
+    #  轮播
+    # ------------------------------------------------------------------
+    def _advance(self):
+        if self.segment_count() <= 1:
+            return
+        self._index = (self._index + 1) % self.segment_count()
+        self._fade.stop()
+        self._effect.setOpacity(0.0)
+        self._apply_segment()
+        self._fade.start()
+
+    def _apply_segment(self):
+        """切换到当前索引对应的段（0=天气+AQI，>=1=第 n 条预警，右对齐）。
+        预警过长时保留"发布了什么预警"的后半段，前半段用省略号替代（ElideLeft）。"""
+        if self._index == 0:
+            self.warning_label.hide()
+            self.weather_display.show()
+            self.updateGeometry()
+            return
+        w = self._warnings[self._index - 1]
+        color = w.get("color_hex") or warning_color_hex(w.get("color"))
+        title = w.get("title") or "".join(
+            [w.get("typeName", ""), w.get("level", "")]) or "天气预警"
+        self.warning_label.setStyleSheet("color: %s; background: transparent;" % color)
+        avail = self._max_width if self._max_width < 1000000 else (self.width() or s(160))
+        fm = QFontMetricsF(self.warning_label.font())
+        # 右端省略：只保留"发布了什么预警"部分，前面用省略号替代
+        self.warning_label.setText(
+            fm.elidedText("预警 · %s" % title, Qt.ElideLeft, avail))
+        self.weather_display.hide()
+        self.warning_label.show()
+        self.updateGeometry()
+
+    def cap_width(self, avail):
+        """限制最宽可用宽度（避免碰到时间模块），预警过长时右端省略号。"""
+        if avail <= 0:
+            return
+        self._max_width = avail
+        self.setMaximumWidth(avail)
+        if self._index > 0:
+            self._apply_segment()
+        self.updateGeometry()
+
+    def sizeHint(self):
+        if self._index == 0:
+            return self.weather_display.sizeHint()
+        fm = QFontMetricsF(self.warning_label.font())
+        text = "预警 · %s" % (self._warnings[self._index - 1].get("title") or "天气预警") \
+            if self._warnings else "预警"
+        return QSize(int(fm.horizontalAdvance(text)) + s(4), s(26))
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._index > 0:
+            self._apply_segment()
+
+
+class CourseProgress(QWidget):
+    """课程进度条：灵动岛底部细线，上课时按进度填充。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._percent = 0.0
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.hide()
 
-    _f = Property(float, lambda self: self._flip,
-                  lambda self, v: self._set_flip(v))
+    def set_progress(self, percent):
+        percent = max(0.0, min(100.0, float(percent or 0.0)))
+        if abs(percent - self._percent) > 0.05:
+            self._percent = percent
+            self.update()
 
-    def _set_flip(self, value):
-        self._flip = value
-        self.update()
-
-    def set_pages(self, front, back):
-        """设置正面/背面牌面。"""
-        self._front = front
-        self._back = back
-        self._flip = 0.0
-        self.update()
-
-    def flip(self, on_done=None):
-        """开始翻转，结束后回调。"""
-        self._on_done = on_done
-        self._flip = 0.0
-        self._anim.start()
-
-    def _finish(self):
-        done = self._on_done
-        self._on_done = None
-        if done:
-            done()
+    def set_percent(self, percent):
+        self.set_progress(percent)
 
     def paintEvent(self, event):
-        if self._front.isNull() and self._back.isNull():
+        if self.width() <= 0:
             return
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        scale = abs(math.cos(math.pi * self._flip))   # 0.5 时收缩为一条线，此时换牌面
-        pix = self._front if self._flip < 0.5 else self._back
-        if pix.isNull():
-            painter.end()
-            return
-        w = max(1, int(self.width() * scale))
-        x = (self.width() - w) // 2
-        painter.drawPixmap(x, 0, w, self.height(), pix)
+        painter.setRenderHint(QPainter.Antialiasing)
+        h = self.height()
+        radius = h / 2
+        track = QColor(theme_colors()["border"])
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(track)
+        painter.drawRoundedRect(0, 0, self.width(), h, radius, radius)
+        fill_w = int(self.width() * self._percent / 100.0)
+        if fill_w > 0:
+            primary = QColor(theme_colors()["primary"])
+            gradient = QColor(primary)
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(0, 0, fill_w, h, radius, radius)
         painter.end()
 
 
+class HitokotoLabel(QWidget):
+    """每日一言（Hitokoto）：位于课程模块与时间之间，字数按可用宽度省略截断。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._full_text = ""
+        self._label = QLabel("", self)
+        self._label.setFont(make_font(FONT_MAIN))
+        self._label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._label)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.hide()
+
+    def set_quote(self, data):
+        """设置一言内容：只显示句子（不占空间显示出处），过长时省略号截断。"""
+        sentence = (data.get("hitokoto") or "").strip()
+        if not sentence:
+            self.hide()
+            return
+        self._full_text = "「%s」" % sentence
+        self._apply_style()
+        self._update_elided()
+        self.show()
+        self.updateGeometry()
+
+    def _apply_style(self):
+        self._label.setStyleSheet("color: %s;" % theme_colors()["text_secondary"])
+
+    def _update_elided(self):
+        if not self._full_text:
+            return
+        avail = self.width() if self.width() > 0 else s(120)
+        fm = QFontMetricsF(self._label.font())
+        self._label.setText(fm.elidedText(self._full_text, Qt.ElideRight, avail))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_elided()
+
+    def sizeHint(self):
+        if not self._full_text:
+            return QSize(s(4), s(26))
+        fm = QFontMetricsF(self._label.font())
+        return QSize(int(fm.horizontalAdvance(self._full_text)) + s(4), s(26))
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+
 class WeatherDisplay(QWidget):
-    """右侧温度显示：矢量图标 + 温度（单行）；网络异常时摇摆动画（±3°）。"""
+    """天气显示：矢量图标 + 当前天气（小雨等）+ 温度 + AQI（固定显示，不参与轮播）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._angle = 0.0
         self._icon = QPixmap()
+        self._text = ""
         self._temp = "--°C"
         self._error = False
         self._cached = False
@@ -247,7 +398,10 @@ class WeatherDisplay(QWidget):
 
     def _measure(self, with_aqi):
         fm = QFontMetricsF(make_font(FONT_MAIN))
-        w = s(2) + s(18) + s(6) + fm.horizontalAdvance(self._temp)
+        w = s(2) + s(18)   # 图标
+        if self._text:
+            w += s(6) + fm.horizontalAdvance(self._text)   # 当前天气文字
+        w += s(6) + fm.horizontalAdvance(self._temp)       # 温度
         if with_aqi:
             aqi = self._aqi_text()
             if aqi:
@@ -280,6 +434,7 @@ class WeatherDisplay(QWidget):
         colors = theme_colors()
         self._error = False
         self._cached = bool(data.get("cached"))
+        self._text = data.get("text", "") or ""
         self._temp = "%s°C" % data.get("temp", "--")
         self._air = data.get("air") or None
         self._icon = IconDrawer.weather_icon(
@@ -287,18 +442,16 @@ class WeatherDisplay(QWidget):
         self.updateGeometry()
         self.update()
 
-    def set_error(self, cached, message):
+    def set_error(self, message):
+        """天气获取失败：直接显示真实错误信息（不再回退到缓存数据）。"""
         colors = theme_colors()
         self._error = True
-        self._cached = cached is not None
-        self._air = (cached or {}).get("air") or None
-        if cached:
-            self._temp = "%s°C" % cached.get("temp", "--")
-            self._icon = IconDrawer.weather_icon(
-                cached.get("code", 999), s(18), fg=colors["icon_fg"])
-        else:
-            self._temp = "--°C"
-            self._icon = QPixmap()
+        self._cached = False
+        self._air = None
+        self._text = ""
+        self._temp = "--°C"
+        self._icon = QPixmap()
+        self._err_text = (message or "网络异常").strip() or "网络异常"
         self.updateGeometry()
         self.update()
 
@@ -324,12 +477,22 @@ class WeatherDisplay(QWidget):
         painter.setFont(font)
         fm = QFontMetricsF(font)
         text_x = x + icon_size + s(6)
+
+        # 当前天气文字（如 小雨）显示在温度左侧
+        if self._text and not self._error:
+            painter.setPen(QColor(colors["text_secondary"]))
+            painter.drawText(
+                QRectF(text_x, (self.height() - fm.height()) / 2,
+                       fm.horizontalAdvance(self._text), fm.height()),
+                Qt.AlignLeft | Qt.AlignVCenter, self._text)
+            text_x += fm.horizontalAdvance(self._text) + s(6)
+
         rect = QRectF(text_x, (self.height() - fm.height()) / 2,
                       self.width() - text_x, fm.height())
 
         if self._error:
             painter.setPen(QColor(colors["danger"]))
-            text = "%s %s" % (self._temp, self._err_text) if self._cached else self._err_text
+            text = self._err_text
         else:
             painter.setPen(QColor(colors["text_main"]))
             text = self._temp
@@ -370,21 +533,37 @@ class IslandWindow(QWidget):
         self.weather_manager = weather_manager
         self.config = config
 
-        self._screen_index = 0
-        self._fullscreen = False
+        self._screen_index = int(config.get("island_screen", 0))
+        self._fullscreen = bool(config.get("island_fullscreen", False))
+        self._pass_through = bool(config.get("island_passthrough", False))
         self._width_ratio = float(config.get("island_width_ratio", 1.0))
         self._glass_style = config.get("island_glass_style", "auto")
         self._glass_custom = config.get("island_glass_custom", "#1E202D")
+        self._material = config.get("island_material", "frosted")
         self._opacity = float(config.get("opacity", 0.9))
-        self._pass_through = False
         self._course_full_text = "今日无课程安排"
         self._warnings = []
         self._weather_data = None
+
+        # 课程显示动态状态
+        self._cstatus = None
+        self._carousel_items = []
+        self._carousel_index = 0
+        self._course_elide_avail = 0
 
         # 鼠标靠近自动隐藏（默认开启）
         self._hover_hide = bool(config.get("hover_hide", True))
         self._hover_auto_hidden = False
         self._sliding = False
+        self._hover_margin = int(config.get("hover_hide_margin", 60))
+        self._hover_interval = int(config.get("hover_hide_interval", 100))
+
+        # 课程进度条粗细
+        self._progress_height = int(config.get("course_progress_height", 3))
+        # 每日一言分类（空 = 随机全部）与刷新间隔（分钟）
+        self._hitokoto_category = config.get("hitokoto_category", "") or ""
+        self._hitokoto_refresh_ms = max(
+            60, int(config.get("hitokoto_refresh_minutes", 15))) * 60 * 1000
 
         # ---- 窗口配置：置顶 / 无边框 / 工具窗 / 不抢焦点 / 透明背景 ----
         self.setWindowFlags(
@@ -395,6 +574,10 @@ class IslandWindow(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+
+        icon = IconDrawer.app_icon_qicon(64)
+        if icon is not None:
+            self.setWindowIcon(icon)
 
         self._build_ui()
         self._build_animations()
@@ -423,7 +606,7 @@ class IslandWindow(QWidget):
         self.bg_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.bg_frame.setStyleSheet(
             "background-color: %s; border: none; border-radius: 0px;" % self._glass_bg())
-        make_blur(self.bg_frame, radius=8)
+        self._blur_effect = make_blur(self.bg_frame, radius=8)
         outer_layout.addWidget(self.bg_frame, 0, 0)
 
         # 内容层（透明，浮于背景之上）
@@ -431,23 +614,33 @@ class IslandWindow(QWidget):
         self.content_widget = QWidget(self.outer_frame)
         self.content_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         content = QHBoxLayout(self.content_widget)
-        content.setContentsMargins(s(20), 0, s(20), 0)   # padding: 0 20px
-        content.setSpacing(0)
+        content.setContentsMargins(s(4), 0, s(20), 0)   # 左侧贴齐灵动岛
+        content.setSpacing(s(8))
         content.setAlignment(Qt.AlignVCenter)
         outer_layout.addWidget(self.content_widget, 0, 0)
 
         # 左：课程信息（固定，可收缩，超出时省略号）
         self._build_course_section(content)
+
+        # 每日一言：绝对定位，居中于课程模块与时间之间（不占布局）
+        self.hitokoto_label = HitokotoLabel(self.content_widget)
+        self.hitokoto_label.hide()
+
         content.addStretch(1)
 
-        # 右：天气/AQI 与 预警 轮播
-        self._build_weather_section(content)
+        # 右：天气+AQI 与 预警 分段轮播（最右侧）
+        self.right_carousel = RightCarousel(self.content_widget)
+        self.weather_display = self.right_carousel.weather_display
+        content.addWidget(self.right_carousel)
 
         # 中：时钟 + 日期（绝对居中，永不移动、永不压缩）
         self._build_center_section(self.content_widget)
 
         # 预警：右上角浮层
         self._build_warning_overlay()
+
+        # 课程进度条：灵动岛底部细线
+        self.course_progress = CourseProgress(self.outer_frame)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -470,12 +663,20 @@ class IslandWindow(QWidget):
         self.course_dot.setStyleSheet("background: #22C55E; border-radius: %dpx;" % s(3))
         row.addWidget(self.course_dot)
 
+        # 课间轮播左右箭头（仅课间显示）
+        self.course_prev_btn = self._make_carousel_btn("◀", panel)
+        self.course_prev_btn.clicked.connect(self._carousel_prev)
+        self.course_next_btn = self._make_carousel_btn("▶", panel)
+        self.course_next_btn.clicked.connect(self._carousel_next)
+        row.addWidget(self.course_prev_btn)
+
         # 课程文字（不粗，margin-right 20px）
         self.course_label = QLabel("今日无课程安排", panel)
         self.course_label.setFont(make_font(FONT_MAIN, bold=False))
         self.course_label.setMinimumWidth(0)
         self.course_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         row.addWidget(self.course_label)
+        row.addWidget(self.course_next_btn)
 
         content.addWidget(panel)
         self.course_panel = panel
@@ -484,6 +685,24 @@ class IslandWindow(QWidget):
         self._course_effect = QGraphicsOpacityEffect(panel)
         panel.setGraphicsEffect(self._course_effect)
         self._course_effect.setOpacity(1.0)
+
+    def _make_carousel_btn(self, text, parent):
+        """课间轮播的小箭头按钮。"""
+        dark = theme_colors()
+        theme = QApplication.instance().property("__theme") or "dark"
+        bg = "rgba(255,255,255,0.12)" if theme == "dark" else "rgba(0,0,0,0.08)"
+        bg_hover = "rgba(255,255,255,0.28)" if theme == "dark" else "rgba(0,0,0,0.16)"
+        btn = QPushButton(text, parent)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setFixedSize(s(16), s(16))
+        btn.setToolTip("手动切换课程预告")
+        btn.setStyleSheet(
+            "QPushButton { background: %s; border: none; border-radius: %dpx;"
+            " color: %s; font-size: 8pt; padding: 0px; }"
+            "QPushButton:hover { background: %s; }"
+            % (bg, s(8), dark["text_secondary"], bg_hover))
+        btn.hide()
+        return btn
 
     # ------------------------------------------------------------------
     #  中：时钟 + 日期
@@ -526,99 +745,17 @@ class IslandWindow(QWidget):
             (h - self.center_group.height()) // 2)
 
     # ------------------------------------------------------------------
-    #  右：天气/AQI 与 预警 轮播
+    #  右侧分段轮播（天气+AQI / 预警）
     # ------------------------------------------------------------------
-    def _build_weather_section(self, content):
-        # 右侧用 QStackedWidget：天气/AQI 与 预警 二选一，保证绝不重叠
-        self.right_stack = QStackedWidget(self.content_widget)
-        self.right_stack.setStyleSheet(
-            "QStackedWidget { border: none; background: transparent; }")
-        self.right_stack.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        self.weather_display = WeatherDisplay(self.right_stack)
-        self.warning_badge = QLabel("", self.right_stack)
-        self.warning_badge.setFont(make_font(FONT_MAIN, bold=True))
-        self.warning_badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.warning_badge.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-
-        self.right_stack.addWidget(self.weather_display)
-        self.right_stack.addWidget(self.warning_badge)
-
-        self._warning_full_text = ""
-        self._right_show_weather = True
-        self.right_stack.setCurrentIndex(0)
-        content.addWidget(self.right_stack)
-
-        # 翻牌器浮层：覆盖在右侧上方，播放翻转动画
-        self.flip_card = FlipCard(self.content_widget)
-
-    def _show_weather(self):
-        self._right_show_weather = True
-        self.right_stack.setCurrentIndex(0)
-        self.right_stack.show()
-        self._update_weather_fit()
-
-    def _show_warning(self):
-        if not self._warnings:
-            self._show_weather()
+    def _update_right_fit(self):
+        """按与中心时钟的实际间距限制右侧轮播最宽宽度，避免遮挡时间。"""
+        if not hasattr(self, "right_carousel"):
             return
-        self._right_show_weather = False
-        w = self._warnings[0]
-        color = w.get("color_hex") or warning_color_hex(w.get("color"))
-        title = w.get("title") or "".join(
-            [w.get("typeName", ""), w.get("level", "")]) or "天气预警"
-        self._warning_full_text = "预警 · %s" % title
-        self.warning_badge.setStyleSheet("color: %s; background: transparent;" % color)
-        self.right_stack.setCurrentIndex(1)
-        self.right_stack.show()
-        self._update_warning_elide()
-
-    def _rotate_right(self):
-        """右侧信息轮播：天气/AQI 与 预警 以翻牌效果轮流显示。"""
-        current = self.right_stack.currentIndex()
-        if self._warnings:
-            target = 1 if current == 0 else 0
-        else:
-            target = 0
-        if target != current:
-            self._flip_to(target)
-        else:
-            self._right_show_weather = (target == 0)
-
-    def _flip_to(self, index):
-        """翻牌切换到 index 页（0=天气 1=预警）。"""
-        if not hasattr(self, "flip_card"):
-            self.right_stack.setCurrentIndex(index)
-            self._right_show_weather = (index == 0)
+        right_avail = self.content_widget.width() - (
+            self.center_group.x() + self.center_group.width()) - s(16)
+        if right_avail <= 0:
             return
-        front = self.right_stack.currentWidget().grab()
-        back = self.right_stack.widget(index).grab()
-        self.flip_card.set_pages(front, back)
-        self.flip_card.setGeometry(self.right_stack.geometry())
-        self.flip_card.raise_()
-        self.flip_card.show()
-
-        def on_done():
-            self.right_stack.setCurrentIndex(index)
-            self._right_show_weather = (index == 0)
-            self.flip_card.hide()
-            if index == 0:
-                self._update_weather_fit()
-            else:
-                self._update_warning_elide()
-
-        self.flip_card.flip(on_done)
-
-    def _update_warning_elide(self, avail=0):
-        if not hasattr(self, "warning_badge") or not self.warning_badge.isVisible():
-            return
-        if avail <= 0:
-            # 布局未就绪时不截断，保留完整文字
-            self.warning_badge.setText(self._warning_full_text)
-            return
-        fm = QFontMetricsF(self.warning_badge.font())
-        self.warning_badge.setText(
-            fm.elidedText(self._warning_full_text, Qt.ElideRight, avail))
+        self.right_carousel.cap_width(right_avail)
 
     # ------------------------------------------------------------------
     #  预警浮层（右上角）
@@ -693,17 +830,77 @@ class IslandWindow(QWidget):
         self._course_timer.timeout.connect(self.update_course)
         self._course_timer.start()
 
-        # 鼠标靠近自动隐藏轮询
+        # 鼠标靠近自动隐藏轮询（间隔可调）
         self._hover_timer = QTimer(self)
-        self._hover_timer.setInterval(self.HOVER_HIDE_INTERVAL)
+        self._hover_timer.setInterval(self._hover_interval)
         self._hover_timer.timeout.connect(self._check_hover_hide)
         self._hover_timer.start()
 
-        # 右侧信息轮播：天气/AQI 与 预警 轮流显示
-        self._right_timer = QTimer(self)
-        self._right_timer.setInterval(5000)
-        self._right_timer.timeout.connect(self._rotate_right)
-        self._right_timer.start()
+        # 课间课程预告轮播
+        self._carousel_timer = QTimer(self)
+        self._carousel_timer.timeout.connect(self._on_carousel_tick)
+
+        # 每日一言：启动即预缓存一批 + 按设定间隔轮换/补充
+        self._hitokoto_queue = []
+        self._hitokoto_shown = False
+        self._hitokoto_timer = QTimer(self)
+        self._hitokoto_timer.setInterval(self._hitokoto_refresh_ms)
+        self._hitokoto_timer.timeout.connect(self._on_hitokoto_tick)
+        self._hitokoto_timer.start()
+        self._fetch_hitokoto()
+
+    # ==================================================================
+    #  每日一言（Hitokoto）
+    # ==================================================================
+    def _fetch_hitokoto(self):
+        """后台批量获取经过字数筛选的一言（一次缓存多条）。"""
+        if hasattr(self, "_hitokoto_worker") and self._hitokoto_worker.isRunning():
+            return
+        from hitokoto import HitokotoFetcher
+        self._hitokoto_worker = HitokotoFetcher(
+            self._hitokoto_category, count=3, max_len=21, parent=self)
+        self._hitokoto_worker.ok.connect(self._on_hitokoto_batch)
+        self._hitokoto_worker.fail.connect(self._on_hitokoto_fail)
+        self._hitokoto_worker.start()
+
+    def _on_hitokoto_batch(self, quotes):
+        """收到一批合格句子：入缓存；当前未显示则立即显示一条。"""
+        self._hitokoto_queue.extend(quotes)
+        if not self._hitokoto_shown:
+            self._show_next_hitokoto()
+
+    def _on_hitokoto_tick(self):
+        """刷新间隔到：切换到下一条缓存；缓存耗尽则重新获取。"""
+        self._show_next_hitokoto()
+
+    def _show_next_hitokoto(self):
+        """显示缓存队列中的下一条（字数已筛选，保证放得下）。"""
+        if self._hitokoto_queue:
+            quote = self._hitokoto_queue.pop(0)
+            self._hitokoto_shown = True
+            self.hitokoto_label.set_quote(quote)
+            self._apply_adaptive_visibility()
+        else:
+            self._hitokoto_shown = False
+            self.hitokoto_label.hide()
+            self._apply_adaptive_visibility()
+            self._fetch_hitokoto()
+
+    def _on_hitokoto_fail(self, _msg):
+        # 拿不到合适字数的句子：隐藏，稍后由定时器重试
+        self._hitokoto_shown = False
+        self.hitokoto_label.hide()
+        self._apply_adaptive_visibility()
+
+    def set_hitokoto_category(self, category):
+        self._hitokoto_category = (category or "").strip()
+        self._hitokoto_queue.clear()
+        self._fetch_hitokoto()
+
+    def set_hitokoto_refresh(self, minutes):
+        """设置一言刷新间隔（分钟），实时生效。"""
+        self._hitokoto_refresh_ms = max(1, int(minutes)) * 60 * 1000
+        self._hitokoto_timer.setInterval(self._hitokoto_refresh_ms)
 
     # ==================================================================
     #  鼠标靠近自动隐藏
@@ -711,7 +908,7 @@ class IslandWindow(QWidget):
     def _hover_zone(self):
         """鼠标靠近判定区域：灵动岛所在屏幕顶部的矩形（向下扩展边距）。"""
         rect = self.calculate_island_geometry()
-        rect.setBottom(rect.bottom() + s(self.HOVER_HIDE_MARGIN))
+        rect.setBottom(rect.bottom() + s(self._hover_margin))
         return rect
 
     def _check_hover_hide(self):
@@ -737,31 +934,66 @@ class IslandWindow(QWidget):
             if not self.isVisible():
                 self.slide_in()
 
+    def set_hover_margin(self, margin):
+        """设置靠近隐藏的感应范围（像素）。"""
+        self._hover_margin = max(10, min(400, int(margin)))
+
+    def set_hover_interval(self, ms):
+        """设置靠近检测的轮询间隔（毫秒，越小反应越快）。"""
+        self._hover_interval = max(30, min(2000, int(ms)))
+        if hasattr(self, "_hover_timer"):
+            self._hover_timer.setInterval(self._hover_interval)
+
+    def hover_margin(self):
+        return self._hover_margin
+
+    def hover_interval(self):
+        return self._hover_interval
+
     def hover_hide_enabled(self):
         return self._hover_hide
 
     # ==================================================================
-    #  毛玻璃样式（可自定义）
+    #  材质（亚克力 / 毛玻璃，可自定义底色）
     # ==================================================================
     def _glass_bg(self):
-        """返回当前毛玻璃背景色：auto=跟随主题，dark/light=固定深浅，custom=自定义色。"""
+        """返回当前背景色：auto=跟随主题，dark/light=固定深浅，custom=自定义色。
+        亚克力材质更透（低 alpha），毛玻璃材质更实（高 alpha）。"""
         style = self._glass_style
+        alpha = 0.5 if self._material == "acrylic" else 0.72
         if style == "dark":
-            return "rgba(30, 30, 40, 0.7)"
+            return "rgba(30, 30, 40, %s)" % alpha
         if style == "light":
-            return "rgba(255, 255, 255, 0.72)"
+            return "rgba(255, 255, 255, %s)" % alpha
         if style == "custom":
             c = QColor(self._glass_custom or "#1E202D")
-            return "rgba(%d, %d, %d, 0.72)" % (c.red(), c.green(), c.blue())
-        return nav_bar_color()
+            return "rgba(%d, %d, %d, %s)" % (c.red(), c.green(), c.blue(), alpha)
+        theme = QApplication.instance().property("__theme") or "dark"
+        if theme == "light":
+            return "rgba(255, 255, 255, %s)" % alpha
+        return "rgba(30, 30, 40, %s)" % alpha
 
     def _apply_glass_bg(self):
         if hasattr(self, "bg_frame"):
             self.bg_frame.setStyleSheet(
                 "background-color: %s; border: none; border-radius: 0px;" % self._glass_bg())
 
+    def _apply_material(self):
+        """应用当前材质：亚克力=系统级 DWM 模糊；毛玻璃=控件级 QGraphicsBlur。"""
+        if not hasattr(self, "bg_frame"):
+            return
+        if self._material == "acrylic":
+            if self._blur_effect is not None:
+                self._blur_effect.setEnabled(False)
+            enable_acrylic(self, theme_colors()["acrylic_abgr"])
+        else:
+            if self._blur_effect is not None:
+                self._blur_effect.setEnabled(True)
+            disable_acrylic(self)
+        self._apply_glass_bg()
+
     def set_glass_style(self, style, custom_hex=""):
-        """设置毛玻璃样式：auto / dark / light / custom。"""
+        """设置毛玻璃底色样式：auto / dark / light / custom。"""
         self._glass_style = style
         if custom_hex:
             self._glass_custom = custom_hex
@@ -769,6 +1001,16 @@ class IslandWindow(QWidget):
 
     def glass_style(self):
         return self._glass_style
+
+    def material(self):
+        return self._material
+
+    def set_material(self, material):
+        """设置灵动岛材质：acrylic（亚克力）/ frosted（毛玻璃）。"""
+        material = "acrylic" if material == "acrylic" else "frosted"
+        if material != self._material:
+            self._material = material
+            self._apply_material()
 
     # ==================================================================
     #  屏幕适配（多显示器 / 热插拔）
@@ -799,43 +1041,103 @@ class IslandWindow(QWidget):
         self._apply_adaptive_visibility()
 
     def _apply_adaptive_visibility(self):
-        """防重叠：宽度不足时优先隐藏"天气"，再隐藏"课程"；时钟+日期永不隐藏。
-        各模块按与中心时钟的实际间距自动调整：左模块省略号截断，
-        右模块按可用宽度自动压缩（隐藏 AQI）或整体隐藏。"""
+        """防重叠：宽度不足时优先隐藏"右侧轮播"，再隐藏"课程"；时钟+日期永不隐藏。
+        右侧轮播按可用宽度自动压缩 AQI / 截断预警文字。"""
         if not hasattr(self, "content_widget"):
             return
         width = self.width()
-        self.right_stack.setVisible(width >= s(self.HIDE_WEATHER_WIDTH))
-        self.course_panel.setVisible(width >= s(self.HIDE_COURSE_WIDTH))
+        # 注意：HIDE_* 阈值本身是逻辑像素，不能再用 s() 按 DPI 二次缩放，
+        # 否则高 DPI 下会被错误地整体隐藏
+        self.right_carousel.setVisible(width >= self.HIDE_WEATHER_WIDTH)
+        self.course_panel.setVisible(width >= self.HIDE_COURSE_WIDTH)
         self._layout_warning_overlay()
         # 先完成布局，再把时间绝对定位到正中央
         self.content_widget.layout().activate()
         self._recenter_time()
+        self._fit_left_modules()
         self._update_course_elide()
-        self._update_weather_fit()
+        self._update_right_fit()
+        self._reposition_progress()
 
-    def _update_weather_fit(self):
-        """右模块防遮挡：可用宽度不足时先压缩天气（去掉 AQI），预警文字省略号截断。"""
-        if not hasattr(self, "right_stack"):
+    def _fit_left_modules(self):
+        """左侧空间分配：课程 + 每日一言 共享时钟左侧，互相留空隙、绝不遮挡时间。
+        一言最多占 21 字宽度；空间不足时优先让课程显示，隐藏一言。
+        课程文字按"预留一言空间"后的宽度省略，保证轮播换文案时模块宽度不突变。"""
+        clock_left = self.center_group.x()
+        # 布局未就绪时不处理（避免异步取到一言时被误隐藏）
+        if clock_left <= 0 or self.content_widget.width() <= 0:
             return
-        right_avail = self.content_widget.width() - (
-            self.center_group.x() + self.center_group.width()) - s(16)
-        if right_avail <= 0:
-            return   # 布局尚未就绪，保持当前状态
-        if self.right_stack.currentIndex() == 0:
-            full = self.weather_display.full_width()
-            compact = self.weather_display.compact_width()
-            if full <= right_avail:
-                self.weather_display.set_compact(False)
-                self.right_stack.show()
-            elif compact <= right_avail:
-                self.weather_display.set_compact(True)
-                self.right_stack.show()
-            else:
-                self.right_stack.hide()   # 空间实在不够，整个右侧隐藏
-        elif self.right_stack.currentIndex() == 1:
-            self.right_stack.show()
-            self._update_warning_elide(right_avail)
+        fm = QFontMetricsF(make_font(FONT_MAIN))
+        quote_max_w = int(fm.horizontalAdvance("一" * 21)) + s(4)
+        gap = s(10)
+        course_overhead = s(6) + s(8) + s(2)   # 状态圆点 + 间距 + 面板边距
+        hitokoto_on = getattr(self, "hitokoto_label", None) is not None \
+            and self.hitokoto_label.isVisible()
+        if hitokoto_on:
+            # 给一言预留 21 字宽（不超过左侧 45%），课程用剩余
+            reserved = min(quote_max_w, int((clock_left - gap) * 0.45))
+            course_avail = clock_left - gap - gap - reserved - course_overhead
+            if course_avail >= s(60) and reserved >= s(50):
+                self._course_elide_avail = course_avail
+                self._recenter_hitokoto()
+                return
+            self.hitokoto_label.hide()   # 空间不足，隐藏一言
+            self._hitokoto_shown = False
+        self._course_elide_avail = clock_left - gap - course_overhead
+        self._recenter_hitokoto()
+
+    def _recenter_hitokoto(self):
+        """把一言绝对定位到课程模块与时间之间居中，两侧留间隙。
+        课程模块宽度（含课间轮播换屏）变化时也自动重新居中；
+        布局未收敛时延后一帧再次校位，保证最终精确居中、不重叠。"""
+        if not getattr(self, "_hitokoto_shown", False):
+            return
+        h = getattr(self, "hitokoto_label", None)
+        if h is None or not h._full_text:
+            return
+        gap = s(10)
+        course_right = self.course_panel.x() + self.course_panel.width()
+        clock_left = self.center_group.x()
+        avail = clock_left - gap - (course_right + gap)
+        if avail < s(50):
+            if not getattr(self, "_hitokoto_recenter_pending", False):
+                self._hitokoto_recenter_pending = True
+                QTimer.singleShot(0, self._finish_hitokoto_placement)
+            return
+        self._position_hitokoto(course_right, avail)
+        if not getattr(self, "_hitokoto_recenter_pending", False):
+            self._hitokoto_recenter_pending = True
+            QTimer.singleShot(0, self._finish_hitokoto_placement)
+
+    def _position_hitokoto(self, course_right, avail):
+        h = self.hitokoto_label
+        fm = QFontMetricsF(make_font(FONT_MAIN))
+        natural = int(fm.horizontalAdvance(h._full_text)) + s(4)
+        w = min(natural, avail)
+        h.setFixedSize(w, s(26))
+        x = course_right + s(10) + (avail - w) // 2
+        y = (self.content_widget.height() - h.height()) // 2
+        h.move(x, y)
+        h._update_elided()
+        h.show()
+
+    def _finish_hitokoto_placement(self):
+        """布局收敛后的最终校位：仍放不下则隐藏并恢复课程空间。"""
+        self._hitokoto_recenter_pending = False
+        if not getattr(self, "_hitokoto_shown", False):
+            return
+        h = getattr(self, "hitokoto_label", None)
+        gap = s(10)
+        course_right = self.course_panel.x() + self.course_panel.width()
+        clock_left = self.center_group.x()
+        avail = clock_left - gap - (course_right + gap)
+        if h is None or not h._full_text or avail < s(50):
+            if h is not None:
+                h.hide()
+            self._hitokoto_shown = False
+            self._fit_left_modules()
+            return
+        self._position_hitokoto(course_right, avail)
 
     def _connect_screen_signals(self):
         """监听屏幕增删 / 分辨率变更 / DPI 变更，自动重新适配。"""
@@ -861,52 +1163,212 @@ class IslandWindow(QWidget):
         self.time_label.set_text(now.strftime("%H:%M:%S"))
         # 日期 MM-DD 周X
         self.date_label.setText("%02d-%02d %s" % (now.month, now.day, WEEKDAY_CN2[now.weekday()]))
+        # 课程倒计时/进度每秒刷新
+        self._tick_course()
 
+    # ==================================================================
+    #  课程动态显示（状态机 / 倒计时 / 进度条 / 课间轮播）
+    # ==================================================================
     def update_course(self):
-        """左侧课程信息固定显示（不参与轮播）。"""
-        if hasattr(self, "_course_fade"):
-            self._course_fade.start()
-        colors = theme_colors()
+        """课程显示核心：根据状态机刷新左侧课程信息。"""
         status = self.course_manager.current_status()
-        current = status.get("current")
-        next_course = status.get("next")
+        self._cstatus = status
+
+        colors = theme_colors()
+        st = status.get("status")
 
         if status.get("empty"):
-            self._set_course_text("今日无课程安排", dot=colors["success"], breathe=False)
-        elif current:
-            name = current.get("name", "")
-            teacher = current.get("teacher", "")
-            text = "%s · %s" % (name, teacher) if teacher else name
-            self._set_course_text("正在上课 · %s" % text, dot=colors["primary"], breathe=True)
-        elif next_course and status.get("preview"):
-            self._set_course_text(
-                "下一节 · %s（%d分钟后）" % (next_course.get("name", ""), status["next_minutes"]),
-                dot=colors["danger"], breathe=True)
-        elif next_course:
-            self._set_course_text(
-                "休息中 · 下一节 %s %s" % (next_course.get("name", ""), next_course.get("start", "")),
-                dot=colors["text_secondary"], breathe=False)
+            self._set_course_text("今日无课程安排", dot=colors["success"],
+                                  breathe=False, trigger_fade=True)
+            self._set_progress(None)
+            self._stop_carousel()
+        elif st == "ended":
+            self._set_course_text("今日课程已结束", dot=colors["text_secondary"],
+                                  breathe=False, trigger_fade=True)
+            self._set_progress(None)
+            self._stop_carousel()
+        elif st == "not_started":
+            course = status.get("next") or {}
+            text = "距上课 %s · %s" % (self._format_cd(status.get("countdown", 0)),
+                                       course.get("name", ""))
+            self._set_course_text(text, dot=colors["danger"], breathe=True, trigger_fade=True)
+            self._set_progress(status.get("progress"))
+            self._stop_carousel()
+        elif st == "teaching":
+            course = status.get("current") or {}
+            name = course.get("name", "")
+            teacher = course.get("teacher", "")
+            who = "%s %s" % (name, teacher) if teacher else name
+            text = "上课中 · %s · 剩 %s" % (who, self._format_cd(status.get("countdown", 0)))
+            self._set_course_text(text, dot=colors["primary"], breathe=True, trigger_fade=True)
+            self._set_progress(status.get("progress"))
+            self._stop_carousel()
+        elif st == "break":
+            items = status.get("remaining") or []
+            self._carousel_items = items
+            self._carousel_index = 0
+            self._set_progress(status.get("progress"))
+            if not items:
+                self._set_course_text("课间休息", dot=colors["text_secondary"],
+                                      breathe=False, trigger_fade=True)
+                self._stop_carousel()
+            else:
+                self._update_carousel_screen(trigger_fade=True)
+                self._start_carousel()
         else:
-            self._set_course_text("今日课程已结束", dot=colors["text_secondary"], breathe=False)
+            self._set_course_text("今日课程已结束", dot=colors["text_secondary"],
+                                  breathe=False, trigger_fade=True)
+            self._set_progress(None)
+            self._stop_carousel()
 
-    def _set_course_text(self, text, dot, breathe):
+    def _tick_course(self):
+        """每秒刷新：倒计时与进度条（不重复触发淡入）。"""
+        if not hasattr(self, "_cstatus") or self._cstatus is None:
+            return
+        new = self.course_manager.current_status()
+        old = self._cstatus
+        if (new.get("status") != old.get("status")
+                or new.get("empty") != old.get("empty")):
+            self.update_course()   # 状态切换瞬间立即刷新
+            return
+        self._cstatus = new
+        st = new.get("status")
+        colors = theme_colors()
+        if st == "teaching":
+            course = new.get("current") or {}
+            name = course.get("name", "")
+            teacher = course.get("teacher", "")
+            who = "%s %s" % (name, teacher) if teacher else name
+            text = "上课中 · %s · 剩 %s" % (who, self._format_cd(new.get("countdown", 0)))
+            self._set_course_text(text, dot=colors["primary"], breathe=True, trigger_fade=False)
+            self._set_progress(new.get("progress"))
+        elif st == "not_started":
+            course = new.get("next") or {}
+            text = "距上课 %s · %s" % (self._format_cd(new.get("countdown", 0)),
+                                       course.get("name", ""))
+            self._set_course_text(text, dot=colors["danger"], breathe=True, trigger_fade=False)
+            self._set_progress(new.get("progress"))
+        elif st == "break":
+            self._set_progress(new.get("progress"))
+            if self._carousel_index == 0 and self._carousel_items:
+                self._update_carousel_screen(trigger_fade=False)
+
+    @staticmethod
+    def _format_cd(seconds):
+        return CourseManager.format_countdown(seconds)
+
+    def _set_progress(self, percent):
+        if hasattr(self, "course_progress"):
+            if percent is None:
+                self.course_progress.hide()
+            else:
+                self.course_progress.set_progress(percent)
+                self.course_progress.show()
+                self._reposition_progress()
+
+    def _reposition_progress(self):
+        if not hasattr(self, "course_progress"):
+            return
+        self.course_progress.setGeometry(
+            0, self.outer_frame.height() - s(self._progress_height),
+            self.outer_frame.width(), s(self._progress_height))
+        self.course_progress.raise_()
+
+    def _set_course_text(self, text, dot, breathe, trigger_fade=False):
         self._course_full_text = text
         self.course_dot.setStyleSheet(
             "background: %s; border-radius: %dpx;" % (dot, s(3)))
         self._set_breathing(breathe)
+        if trigger_fade and hasattr(self, "_course_fade"):
+            self._course_fade.start()
         self._update_course_elide()
 
     def _update_course_elide(self):
-        """左侧文字按与中心时钟的实际间距省略号截断，确保不遮挡时间。"""
+        """左侧文字按与中心时钟的实际间距省略号截断，确保不遮挡时间。
+        已为一言预留的空间（_course_elide_avail）优先使用；课程宽度变化后重新居中一言。"""
         if not hasattr(self, "course_label"):
             return
-        # 可用宽度 = 中心时钟左边界 - 左侧起点（content 左边距）
-        avail = self.center_group.x() - s(20)
+        avail = getattr(self, "_course_elide_avail", 0) or (self.center_group.x() - s(4))
         if avail <= 0:
             avail = s(200)
+        # 课间轮播时预留左右箭头的空间
+        if getattr(self, "course_prev_btn", None) is not None and self.course_prev_btn.isVisible():
+            avail -= s(40)
         fm = QFontMetricsF(self.course_label.font())
         elided = fm.elidedText(self._course_full_text, Qt.ElideRight, avail)
         self.course_label.setText(elided)
+        self._recenter_hitokoto()
+
+    # ------------------------------------------------------------------
+    #  课间课程预告轮播
+    # ------------------------------------------------------------------
+    def _start_carousel(self):
+        if len(self._carousel_items) <= 1:
+            self._carousel_timer.stop()
+            self._show_carousel_arrows(False)
+            return
+        self._show_carousel_arrows(True)
+        self._restart_carousel_timer()
+
+    def _stop_carousel(self):
+        self._carousel_timer.stop()
+        self._carousel_items = []
+        self._carousel_index = 0
+        self._show_carousel_arrows(False)
+
+    def _restart_carousel_timer(self):
+        """第 1 屏（下节课+倒计时）停留 5 秒，其余 3 秒。"""
+        if len(self._carousel_items) <= 1:
+            self._carousel_timer.stop()
+            return
+        interval = 5000 if self._carousel_index == 0 else 3000
+        self._carousel_timer.setInterval(interval)
+        self._carousel_timer.start()
+
+    def _on_carousel_tick(self):
+        if not self._carousel_items:
+            return
+        self._carousel_index = (self._carousel_index + 1) % len(self._carousel_items)
+        self._update_carousel_screen(trigger_fade=True)
+        self._restart_carousel_timer()
+
+    def _update_carousel_screen(self, trigger_fade):
+        items = self._carousel_items
+        if not items:
+            return
+        idx = self._carousel_index % len(items)
+        course = items[idx]
+        colors = theme_colors()
+        if idx == 0:
+            text = "下一节 · %s · 距上课 %s" % (
+                course.get("name", ""),
+                self._format_cd(self._cstatus.get("countdown", 0) if self._cstatus else 0))
+            dot = colors["danger"]
+            breathe = True
+        else:
+            text = "%s %s" % (course.get("name", ""), course.get("start", ""))
+            dot = colors["text_secondary"]
+            breathe = False
+        self._set_course_text(text, dot=dot, breathe=breathe, trigger_fade=trigger_fade)
+
+    def _show_carousel_arrows(self, visible):
+        if hasattr(self, "course_prev_btn"):
+            self.course_prev_btn.setVisible(visible)
+            self.course_next_btn.setVisible(visible)
+
+    def _carousel_prev(self):
+        if not self._carousel_items:
+            return
+        self._carousel_index = (self._carousel_index - 1) % len(self._carousel_items)
+        self._update_carousel_screen(trigger_fade=True)
+        self._restart_carousel_timer()   # 手动切换后暂停 5 秒再自动轮播
+
+    def _carousel_next(self):
+        if not self._carousel_items:
+            return
+        self._carousel_index = (self._carousel_index + 1) % len(self._carousel_items)
+        self._update_carousel_screen(trigger_fade=True)
+        self._restart_carousel_timer()
 
     # ==================================================================
     #  天气更新
@@ -915,19 +1377,18 @@ class IslandWindow(QWidget):
         self._shake_anim.stop()
         self._warnings = data.get("warnings", []) or []
         self._weather_data = data
-        self.weather_display.set_weather(data)
-        # 右侧回到天气显示，由轮播定时器切换
-        self._right_show_weather = True
-        self.right_stack.setCurrentIndex(0)
-        self._update_weather_fit()
+        self.right_carousel.set_weather(data)
+        self.right_carousel.set_warnings(self._warnings)
+        self._update_right_fit()
 
     def _on_weather_failed(self, info):
-        self._weather_data = info.get("cached")
-        self._warnings = (self._weather_data or {}).get("warnings", []) or []
-        self.weather_display.set_error(info.get("cached"), info.get("message", ""))
-        self._right_show_weather = True
-        self.right_stack.setCurrentIndex(0)
-        self._update_weather_fit()
+        """天气获取失败：不再回退缓存，直接在灵动岛右侧显示真实错误信息。"""
+        self._weather_data = None
+        self._warnings = []
+        message = info.get("message", "网络异常")
+        self.right_carousel.set_error(message)
+        self.right_carousel.set_warnings([])
+        self._update_right_fit()
         self._shake_anim.start()
 
     # ==================================================================
@@ -936,11 +1397,21 @@ class IslandWindow(QWidget):
     def _on_theme_changed(self, theme_name):
         colors = theme_colors()
         self._apply_glass_bg()
+        self._apply_material()
         self.date_label.setStyleSheet("color: %s;" % colors["text_secondary"])
         self.warning_label.setStyleSheet("color: %s;" % colors["danger"])
         self.warning_panel.setStyleSheet(
             "background-color: %s; border-radius: %dpx; border: none;"
             % (colors["warning_bg"], s(8)))
+        # 自定义字体 / 主题切换后重新应用字体
+        self.course_label.setFont(make_font(FONT_MAIN, bold=False))
+        self.date_label.setFont(make_font(FONT_MAIN))
+        if hasattr(self, "right_carousel"):
+            self.right_carousel.warning_label.setFont(make_font(FONT_MAIN, bold=True))
+            self._update_right_fit()
+        if hasattr(self, "hitokoto_label"):
+            self.hitokoto_label._apply_style()
+            self.hitokoto_label._update_elided()
         self.time_label.update()
         self.course_panel.update()
         self.weather_display.update()
@@ -1040,6 +1511,15 @@ class IslandWindow(QWidget):
         if self.isVisible():
             self.apply_geometry()
 
+    def set_progress_height(self, height):
+        """设置课程进度条粗细（像素），实时生效。"""
+        self._progress_height = max(1, min(8, int(height)))
+        if self.isVisible():
+            self._reposition_progress()
+
+    def progress_height(self):
+        return self._progress_height
+
     def set_screen_index(self, index):
         self._screen_index = index
         self.apply_geometry()
@@ -1088,6 +1568,6 @@ class IslandWindow(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        enable_acrylic(self, theme_colors()["acrylic_abgr"])
+        self._apply_material()
         self.apply_geometry()
         self._apply_click_through()

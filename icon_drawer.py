@@ -9,7 +9,12 @@
 # ==========================================================================
 
 from PySide6.QtCore import Qt, QRectF, QPointF
-from PySide6.QtGui import QPainter, QColor, QPixmap, QFont, QPen, QBrush
+from PySide6.QtGui import QPainter, QColor, QPixmap, QFont, QPen, QBrush, QImage, QPainterPath
+
+import os
+
+# 应用图标文件（用户提供，位于项目根目录）
+_APP_ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "favicon.ico")
 
 
 class IconDrawer:
@@ -27,6 +32,67 @@ class IconDrawer:
         pixmap = QPixmap(int(size), int(size))
         pixmap.fill(Qt.transparent)
         return pixmap
+
+    # ------------------------------------------------------------------
+    #  应用图标（favicon.ico，圆角处理）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _load_icon_pixmap(size):
+        """加载 favicon.ico 并等比缩放到 size（失败返回 None）。"""
+        try:
+            img = QImage(_APP_ICON_PATH)
+            if img.isNull():
+                return None
+            pm = QPixmap.fromImage(img)
+            return pm.scaled(int(size), int(size), Qt.KeepAspectRatio,
+                             Qt.SmoothTransformation)
+        except Exception:
+            return None
+
+    @staticmethod
+    def app_icon(size=64, radius=None):
+        """圆角应用图标（QPixmap），用于托盘 / 窗口 / 设置页 / 关于页。"""
+        pm = IconDrawer._load_icon_pixmap(size)
+        if pm is None:
+            return None
+        if radius is None:
+            radius = max(1, int(size * 0.22))
+        canvas = QPixmap(pm.size())
+        canvas.fill(Qt.transparent)
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, pm.width(), pm.height()), radius, radius)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, pm)
+        painter.end()
+        return canvas
+
+    @staticmethod
+    def app_icon_round(size=64):
+        """圆形应用图标（QPixmap），用于托盘。"""
+        pm = IconDrawer._load_icon_pixmap(size)
+        if pm is None:
+            return None
+        canvas = QPixmap(pm.size())
+        canvas.fill(Qt.transparent)
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addEllipse(0, 0, pm.width(), pm.height())
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, pm)
+        painter.end()
+        return canvas
+
+    @staticmethod
+    def app_icon_qicon(size=64, radius=None):
+        """圆角应用图标（QIcon）。"""
+        pm = IconDrawer.app_icon(size=size, radius=radius)
+        if pm is None:
+            return None
+        from PySide6.QtGui import QIcon
+        return QIcon(pm)
 
     # ------------------------------------------------------------------
     #  托盘文字图标："易"

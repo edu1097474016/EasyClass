@@ -17,8 +17,10 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QFrame,
     QVBoxLayout, QHBoxLayout, QGridLayout, QStackedWidget,
     QScrollArea, QSlider, QLineEdit, QComboBox, QColorDialog,
-    QApplication,
+    QFileDialog, QMessageBox, QApplication,
 )
+
+import json
 
 import utils
 from utils import s, ToggleSwitch
@@ -27,6 +29,7 @@ from course_manager import CourseManager
 from weather_manager import WeatherManager
 from settings_dialog import show_toast, ScheduleEditor
 from island_window import IslandWindow
+from icon_drawer import IconDrawer
 
 # 预设主题色（第一个为默认翠绿色）
 PRESET_COLORS = [
@@ -72,6 +75,10 @@ class AdminWindow(QMainWindow):
         self.setWindowTitle("易课管理后台")
         self.resize(s(1020), s(680))
         self.setMinimumSize(s(860), s(600))
+
+        icon = IconDrawer.app_icon_qicon(64)
+        if icon is not None:
+            self.setWindowIcon(icon)
 
         central = QWidget(self)
         central.setObjectName("adminRoot")
@@ -453,18 +460,27 @@ class AdminWindow(QMainWindow):
         cl.addLayout(row)
         cl.addWidget(self.width_slider)
 
-        cl = self._card(layout, "毛玻璃样式")
+        cl = self._card(layout, "材质")
+        self.material_combo = QComboBox()
+        self.material_combo.addItem("毛玻璃（模糊）", "frosted")
+        self.material_combo.addItem("亚克力（DWM 通透）", "acrylic")
+        material = self.config.get("island_material", "frosted")
+        midx = self.material_combo.findData(material)
+        self.material_combo.setCurrentIndex(midx if midx >= 0 else 0)
+        self.material_combo.currentIndexChanged.connect(self._on_material_changed)
+        self._row(cl, "材质", self.material_combo,
+                  "毛玻璃：控件级高斯模糊 + 半透明；亚克力：系统级 DWM 通透模糊")
+
         self.glass_combo = QComboBox()
         self.glass_combo.addItem("跟随主题", "auto")
-        self.glass_combo.addItem("深色毛玻璃", "dark")
-        self.glass_combo.addItem("浅色毛玻璃", "light")
+        self.glass_combo.addItem("深色", "dark")
+        self.glass_combo.addItem("浅色", "light")
         self.glass_combo.addItem("自定义颜色", "custom")
         style = self.config.get("island_glass_style", "auto")
         idx = self.glass_combo.findData(style)
         self.glass_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.glass_combo.currentIndexChanged.connect(self._on_glass_style_changed)
-        self._row(cl, "毛玻璃样式", self.glass_combo,
-                  "auto 跟随深浅主题，也可固定深浅或自定义颜色")
+        self._row(cl, "底色", self.glass_combo, "auto 跟随深浅主题，也可固定深浅或自定义颜色")
 
         self.glass_color_btn = QPushButton("选择颜色")
         self.glass_color_btn.clicked.connect(self._pick_glass_color)
@@ -491,6 +507,39 @@ class AdminWindow(QMainWindow):
         self._row(cl, "靠近自动隐藏", self.hover_switch,
                   "鼠标靠近灵动岛时自动隐藏，鼠标移开后恢复显示")
 
+        cl = self._card(layout, "靠近隐藏灵敏度")
+        self.margin_slider = QSlider(Qt.Horizontal)
+        self.margin_slider.setRange(20, 160)
+        self.margin_slider.setValue(int(self.config.get("hover_hide_margin", 60)))
+        self._margin_value = QLabel()
+        self._margin_value.setProperty("class", "setting-hint")
+        self.margin_slider.valueChanged.connect(self._on_margin_changed)
+        self._margin_value.setText("%d px" % self.margin_slider.value())
+        mrow = QHBoxLayout()
+        mrow.addWidget(QLabel("感应范围"))
+        mrow.addStretch(1)
+        mrow.addWidget(self._margin_value)
+        cl.addLayout(mrow)
+        cl.addWidget(self.margin_slider)
+
+        self.interval_slider = QSlider(Qt.Horizontal)
+        self.interval_slider.setRange(30, 500)
+        self.interval_slider.setValue(int(self.config.get("hover_hide_interval", 100)))
+        self._interval_value = QLabel()
+        self._interval_value.setProperty("class", "setting-hint")
+        self.interval_slider.valueChanged.connect(self._on_interval_changed)
+        self._interval_value.setText("%d ms" % self.interval_slider.value())
+        irow = QHBoxLayout()
+        irow.addWidget(QLabel("响应速度"))
+        irow.addStretch(1)
+        irow.addWidget(self._interval_value)
+        cl.addLayout(irow)
+        cl.addWidget(self.interval_slider)
+        hint = QLabel("感应范围越大越灵敏；响应速度数值越小反应越快。")
+        hint.setProperty("class", "setting-hint")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
+
         cl = self._card(layout, "显示器")
         self.screen_combo = QComboBox()
         screens = QGuiApplication.screens()
@@ -503,6 +552,69 @@ class AdminWindow(QMainWindow):
             self.screen_combo.setCurrentIndex(current)
         self.screen_combo.currentIndexChanged.connect(self._on_screen_changed)
         self._row(cl, "目标屏幕", self.screen_combo, "灵动岛显示在所选屏幕顶部")
+
+        cl = self._card(layout, "自定义字体")
+        self._font_status = QLabel()
+        self._font_status.setProperty("class", "setting-hint")
+        self._font_status.setWordWrap(True)
+        cl.addWidget(self._font_status)
+        font_btns = QHBoxLayout()
+        font_btns.setSpacing(s(10))
+        import_font_btn = QPushButton("导入字体文件")
+        import_font_btn.clicked.connect(self._import_custom_font)
+        reset_font_btn = QPushButton("恢复默认字体")
+        reset_font_btn.clicked.connect(self._reset_custom_font)
+        font_btns.addWidget(import_font_btn)
+        font_btns.addWidget(reset_font_btn)
+        font_btns.addStretch(1)
+        cl.addLayout(font_btns)
+        hint = QLabel("支持 .ttf / .otf / .ttc，导入后永久保存在 data/fonts/，"
+                      "全局界面（含灵动岛）即时应用该字体。")
+        hint.setProperty("class", "setting-hint")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
+        self._refresh_font_status()
+
+        cl = self._card(layout, "课程进度条")
+        self.progress_slider = QSlider(Qt.Horizontal)
+        self.progress_slider.setRange(1, 8)
+        self.progress_slider.setValue(int(self.config.get("course_progress_height", 3)))
+        self._progress_value = QLabel()
+        self._progress_value.setProperty("class", "setting-hint")
+        self.progress_slider.valueChanged.connect(self._on_progress_changed)
+        self._progress_value.setText("%d px" % self.progress_slider.value())
+        prow = QHBoxLayout()
+        prow.addWidget(QLabel("粗细"))
+        prow.addStretch(1)
+        prow.addWidget(self._progress_value)
+        cl.addLayout(prow)
+        cl.addWidget(self.progress_slider)
+        hint = QLabel("上课时灵动岛底部进度条的粗细（像素）。")
+        hint.setProperty("class", "setting-hint")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
+
+        cl = self._card(layout, "每日一言")
+        self.hitokoto_refresh_slider = QSlider(Qt.Horizontal)
+        self.hitokoto_refresh_slider.setRange(1, 120)
+        self.hitokoto_refresh_slider.setValue(
+            int(self.config.get("hitokoto_refresh_minutes", 15)))
+        self._hitokoto_refresh_value = QLabel()
+        self._hitokoto_refresh_value.setProperty("class", "setting-hint")
+        self.hitokoto_refresh_slider.valueChanged.connect(self._on_hitokoto_refresh_changed)
+        self._hitokoto_refresh_value.setText(
+            "%d 分钟" % self.hitokoto_refresh_slider.value())
+        hrow = QHBoxLayout()
+        hrow.addWidget(QLabel("刷新间隔"))
+        hrow.addStretch(1)
+        hrow.addWidget(self._hitokoto_refresh_value)
+        cl.addLayout(hrow)
+        cl.addWidget(self.hitokoto_refresh_slider)
+        hint = QLabel("课程模块与时间之间显示 Hitokoto 一言（免费、无需 API Key），"
+                      "按此间隔自动刷新新句子。")
+        hint.setProperty("class", "setting-hint")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
 
         layout.addWidget(self._save_btn(self._save_island))
 
@@ -534,6 +646,25 @@ class AdminWindow(QMainWindow):
             self.glass_combo.setCurrentIndex(idx if idx >= 0 else 0)
             self.glass_combo.blockSignals(False)
             self.glass_color_btn.setVisible(style == "custom")
+        if hasattr(self, "material_combo"):
+            material = getattr(self.island, "material", lambda: self.config.get("island_material", "frosted"))
+            if callable(material):
+                material = material()
+            midx = self.material_combo.findData(material)
+            self.material_combo.blockSignals(True)
+            self.material_combo.setCurrentIndex(midx if midx >= 0 else 0)
+            self.material_combo.blockSignals(False)
+        if hasattr(self, "margin_slider"):
+            self.margin_slider.blockSignals(True)
+            self.margin_slider.setValue(self.island.hover_margin())
+            self.margin_slider.blockSignals(False)
+            self.interval_slider.blockSignals(True)
+            self.interval_slider.setValue(self.island.hover_interval())
+            self.interval_slider.blockSignals(False)
+        if hasattr(self, "progress_slider"):
+            self.progress_slider.blockSignals(True)
+            self.progress_slider.setValue(self.island.progress_height())
+            self.progress_slider.blockSignals(False)
 
     def _on_glass_style_changed(self, index):
         style = self.glass_combo.itemData(index)
@@ -542,6 +673,75 @@ class AdminWindow(QMainWindow):
         if self.island is not None:
             self.island.set_glass_style(style, self.config.get("island_glass_custom", ""))
         utils.save_config(self.config)
+
+    def _on_material_changed(self, index):
+        material = self.material_combo.itemData(index)
+        self.config["island_material"] = material
+        if self.island is not None:
+            self.island.set_material(material)
+        utils.save_config(self.config)
+
+    def _on_margin_changed(self, value):
+        self._margin_value.setText("%d px" % value)
+        self.config["hover_hide_margin"] = value
+        if self.island is not None:
+            self.island.set_hover_margin(value)
+
+    def _on_interval_changed(self, value):
+        self._interval_value.setText("%d ms" % value)
+        self.config["hover_hide_interval"] = value
+        if self.island is not None:
+            self.island.set_hover_interval(value)
+
+    def _on_progress_changed(self, value):
+        self._progress_value.setText("%d px" % value)
+        self.config["course_progress_height"] = value
+        if self.island is not None:
+            self.island.set_progress_height(value)
+
+    def _on_hitokoto_refresh_changed(self, value):
+        self._hitokoto_refresh_value.setText("%d 分钟" % value)
+        self.config["hitokoto_refresh_minutes"] = value
+        if self.island is not None:
+            self.island.set_hitokoto_refresh(value)
+
+    def _refresh_font_status(self):
+        if not hasattr(self, "_font_status"):
+            return
+        if utils.CUSTOM_FONT_FAMILY:
+            self._font_status.setText("当前字体：%s（%s）" % (
+                utils.CUSTOM_FONT_FAMILY, self.config.get("custom_font_file", "")))
+        else:
+            self._font_status.setText("当前字体：系统默认（Microsoft YaHei UI）")
+
+    def _import_custom_font(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入字体文件", "", "字体文件 (*.ttf *.otf *.ttc);;所有文件 (*)")
+        if not path:
+            return
+        result = utils.load_custom_font_file(path)
+        if not result:
+            show_toast("字体导入失败，请检查文件格式", success=False)
+            return
+        family, saved_name = result
+        self.config["custom_font_file"] = saved_name
+        utils.save_config(self.config)
+        self._refresh_font_status()
+        # 立即刷新所有自绘组件字体
+        if self.island is not None:
+            self.island._on_theme_changed(self.theme.current_theme)
+        self._apply_style()
+        show_toast("字体已导入并永久保存")
+
+    def _reset_custom_font(self):
+        utils.set_custom_font_family(None)
+        self.config["custom_font_file"] = ""
+        utils.save_config(self.config)
+        self._refresh_font_status()
+        if self.island is not None:
+            self.island._on_theme_changed(self.theme.current_theme)
+        self._apply_style()
+        show_toast("已恢复默认字体")
 
     def _pick_glass_color(self):
         color = QColorDialog.getColor(
@@ -555,13 +755,17 @@ class AdminWindow(QMainWindow):
             show_toast("毛玻璃颜色已应用")
 
     def _on_fullscreen_toggled(self, checked):
+        self.config["island_fullscreen"] = bool(checked)
         if self.island is not None:
             self.island.set_fullscreen(checked)
+        utils.save_config(self.config)
         self._refresh_dashboard()
 
     def _on_passthrough_toggled(self, checked):
+        self.config["island_passthrough"] = bool(checked)
         if self.island is not None:
             self.island.set_pass_through(checked)
+        utils.save_config(self.config)
         self._refresh_dashboard()
 
     def _on_hover_hide_toggled(self, checked):
@@ -572,14 +776,24 @@ class AdminWindow(QMainWindow):
         self._refresh_dashboard()
 
     def _on_screen_changed(self, index):
+        self.config["island_screen"] = index
         if self.island is not None:
             self.island.set_screen_index(index)
+        utils.save_config(self.config)
 
     def _save_island(self):
         ratio = self.width_slider.value() / 100.0
         self.config["island_width_ratio"] = ratio
+        self.config["hover_hide_margin"] = self.margin_slider.value()
+        self.config["hover_hide_interval"] = self.interval_slider.value()
+        self.config["course_progress_height"] = self.progress_slider.value()
+        self.config["hitokoto_refresh_minutes"] = self.hitokoto_refresh_slider.value()
         if self.island is not None:
             self.island.set_width_ratio(ratio)
+            self.island.set_hover_margin(self.margin_slider.value())
+            self.island.set_hover_interval(self.interval_slider.value())
+            self.island.set_progress_height(self.progress_slider.value())
+            self.island.set_hitokoto_refresh(self.hitokoto_refresh_slider.value())
         utils.save_config(self.config)
         show_toast("灵动岛设置已保存")
 
@@ -596,20 +810,13 @@ class AdminWindow(QMainWindow):
             bool(self.config.get("auto_locate", True)))
         self.auto_locate_switch.toggled.connect(self._on_auto_locate_toggled)
         self._row(cl, "自动定位", self.auto_locate_switch,
-                  "通过公网 IP 自动定位当前电脑所在城市")
+                  "开启后通过公网 IP 定位当前电脑所在城市")
 
         self.city_edit = QLineEdit()
         self.city_edit.setText(self.config.get("weather_city", "北京"))
         self.city_edit.setPlaceholderText("输入城市，如：北京")
         self.city_edit.setFixedWidth(s(220))
         self._row(cl, "城市", self.city_edit, "关闭自动定位后可手动填写")
-
-        self.coords_edit = QLineEdit()
-        self.coords_edit.setText(self.config.get("weather_coords", ""))
-        self.coords_edit.setPlaceholderText("例如 30.2742,120.155（纬度,经度）")
-        self.coords_edit.setFixedWidth(s(220))
-        self._row(cl, "精确经纬度", self.coords_edit,
-                  "选填；填了就用该坐标查空气/预警，比 IP 定位更准（地图上可查到）")
 
         self.host_edit = QLineEdit()
         self.host_edit.setText(self.config.get("api_host", "https://api.qweather.com"))
@@ -652,7 +859,7 @@ class AdminWindow(QMainWindow):
         host = self.host_edit.text().strip()
         self.config["api_host"] = host or "https://api.qweather.com"
         self.config["auto_locate"] = self.auto_locate_switch.isChecked()
-        self.config["weather_coords"] = self.coords_edit.text().strip()
+        self.config.pop("weather_coords", None)
         utils.save_config(self.config)
         self.weather.update_config(self.config)
         self._refresh_dashboard()
@@ -709,7 +916,7 @@ class AdminWindow(QMainWindow):
     def _build_schedule(self, layout):
         self._header(layout, "设置 / 课程表", "课程表")
 
-        cl = self._card(layout, "今日课程")
+        cl = self._card(layout, "本周课表")
         self._today_courses_label = QLabel()
         self._today_courses_label.setWordWrap(True)
         self._today_courses_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -729,26 +936,85 @@ class AdminWindow(QMainWindow):
         btn.clicked.connect(self._open_editor)
         cl.addWidget(btn)
 
+        cl = self._card(layout, "导入课表")
+        import_info = QLabel("支持导入 JSON 课表文件（与 schedule.json 同结构："
+                             "monday~sunday 七个键，每项为课程列表）。导入后替换当前课表。")
+        import_info.setProperty("class", "setting-hint")
+        import_info.setWordWrap(True)
+        cl.addWidget(import_info)
+        import_btn = QPushButton("导入课表文件")
+        import_btn.setFixedHeight(s(40))
+        import_btn.clicked.connect(self._import_schedule)
+        cl.addWidget(import_btn)
+
+    def _import_schedule(self):
+        """从 JSON 文件导入课表（替换当前课表）。"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入课表文件", "", "JSON 文件 (*.json);;所有文件 (*)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            show_toast("课表文件解析失败，请确认为有效 JSON", success=False)
+            return
+        valid, msg = self._validate_schedule_file(data)
+        if not valid:
+            show_toast(msg, success=False)
+            return
+        answer = QMessageBox.question(
+            self, "导入课表", "将用该文件内容替换当前全部课程，确定导入吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        for key in self.courses.DAY_KEYS:
+            items = data.get(key, [])
+            self.courses.data[key] = [dict(c) for c in items if isinstance(c, dict)]
+        self.courses.save()
+        self._update_schedule_preview()
+        self._refresh_dashboard()
+        show_toast("课表导入成功")
+
+    @staticmethod
+    def _validate_schedule_file(data):
+        """校验导入的课表文件结构，返回 (是否合法, 错误信息)。"""
+        if not isinstance(data, dict):
+            return False, "文件格式错误：应为 JSON 对象"
+        day_keys = {"monday", "tuesday", "wednesday",
+                    "thursday", "friday", "saturday", "sunday"}
+        if not any(k in data for k in day_keys):
+            return False, "未识别到课程数据（缺少 monday~sunday 键）"
+        for key, items in data.items():
+            if not isinstance(items, list):
+                return False, "键 %s 的值应为课程列表" % key
+            for course in items:
+                if not isinstance(course, dict):
+                    return False, "键 %s 中存在非对象课程项" % key
+                if not course.get("name"):
+                    return False, "键 %s 中存在缺少课程名的课程" % key
+        return True, ""
+
     def _update_schedule_preview(self):
+        """显示本周（周一~周日）已编辑的完整课表。"""
         if not hasattr(self, "_today_courses_label"):
             return
-        courses = self.courses.courses_for_day()
-        if not courses:
-            text = "今天没有课程安排"
-        else:
-            lines = []
-            for i, c in enumerate(courses, 1):
-                parts = ["第 %d 节" % i,
-                         "%s - %s" % (c.get("start", ""), c.get("end", ""))]
-                if c.get("name"):
-                    parts.append(c.get("name", ""))
+        lines = []
+        for day_index, day_name in enumerate(self.courses.DAY_NAMES):
+            courses = sorted(
+                self.courses.data.get(self.courses.DAY_KEYS[day_index], []),
+                key=lambda c: CourseManager._to_minutes(c.get("start", "00:00")))
+            if not courses:
+                lines.append("%s：（无课）" % day_name)
+                continue
+            items = []
+            for c in courses:
+                t = "%s %s-%s" % (c.get("name", ""), c.get("start", ""), c.get("end", ""))
                 if c.get("teacher"):
-                    parts.append("教师：%s" % c.get("teacher", ""))
-                if c.get("room"):
-                    parts.append("教室：%s" % c.get("room", ""))
-                lines.append("  ".join(parts))
-            text = "\n".join(lines)
-        self._today_courses_label.setText(text)
+                    t += " %s" % c.get("teacher", "")
+                items.append(t)
+            lines.append("%s：%s" % (day_name, "  /  ".join(items)))
+        self._today_courses_label.setText("\n".join(lines))
 
     # ==================================================================
     #  页面 6：关于
@@ -757,14 +1023,27 @@ class AdminWindow(QMainWindow):
         self._header(layout, "关于", "关于易课")
 
         cl = self._card(layout)
+        about_row = QHBoxLayout()
+        about_row.setSpacing(s(16))
+        icon_pm = IconDrawer.app_icon(s(88))
+        if icon_pm is not None:
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(icon_pm)
+            icon_lbl.setFixedSize(s(88), s(88))
+            icon_lbl.setScaledContents(True)
+            about_row.addWidget(icon_lbl)
+        name_col = QVBoxLayout()
+        name_col.setSpacing(s(4))
         name = QLabel("易课 EasyClass")
         name.setProperty("class", "card-title")
         name.setStyleSheet("font-size: 20px; font-weight: 800;")
-        cl.addWidget(name)
-
+        name_col.addWidget(name)
         version = QLabel("版本 v%s" % utils.APP_VERSION)
         version.setProperty("class", "setting-hint")
-        cl.addWidget(version)
+        name_col.addWidget(version)
+        about_row.addLayout(name_col)
+        about_row.addStretch(1)
+        cl.addLayout(about_row)
 
         desc = QLabel("基于 Python + PySide6 的 Windows 桌面灵动岛教室信息看板。"
                       "固定置顶显示课程信息、时钟、日期、天气与预警，课程切换自动更新。")
@@ -777,8 +1056,12 @@ class AdminWindow(QMainWindow):
              "灵动岛信息栏 / 深色浅色主题 / 可自定义主题色 / 课程表编辑 / "
              "和风天气自动刷新 / 系统托盘 / 多显示器自适应 / 鼠标穿透"),
             ("技术栈", "Python 3.9+ / PySide6 6.5+ / requests"),
-            ("数据来源", "和风天气 QWeather（dev.qweather.com）"),
+            ("数据来源", "和风天气 QWeather（dev.qweather.com）/ Hitokoto一言 (hitokoto.cn)免费公开api"),
+            ("图标来源", "悠哉日常大王 / 第一季"),
             ("开源许可", "MIT License"),
+            ("作者", "环戊二烯基 (github.com/edu1097474016)"),
+            ("鸣谢","deepseeek v4 flash / opencode"),
+
         ):
             sub = QLabel(title)
             sub.setProperty("class", "setting-title")
