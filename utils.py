@@ -33,11 +33,19 @@ APP_VERSION = "1.0.0"
 APP_TAG = "易课 EasyClass v1.0.0 | Silicon UI"
 
 # 项目根目录（与各 .py 模块同级）
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RES_DIR = os.path.join(BASE_DIR, "res")
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+if IS_FROZEN:
+    # PyInstaller 打包：资源（res/模板/图标）在 _MEIPASS，用户数据在 exe 同目录
+    _MEIPASS = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    RES_ROOT = _MEIPASS
+    APP_DIR = os.path.dirname(sys.executable)
+else:
+    RES_ROOT = os.path.dirname(os.path.abspath(__file__))
+    APP_DIR = RES_ROOT
 
-# 数据目录：配置 / 缓存 / 日志 / 字体统一写入 data/ 下
-DATA_DIR = os.path.join(BASE_DIR, "data")
+BASE_DIR = APP_DIR                 # 应用运行目录（数据/迁移等）
+RES_DIR = os.path.join(RES_ROOT, "res")   # 打包资源目录（QSS）
+DATA_DIR = os.path.join(APP_DIR, "data")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 FONTS_DIR = os.path.join(DATA_DIR, "fonts")
 
@@ -198,7 +206,7 @@ def ensure_config_files():
     ):
         target_path = os.path.join(DATA_DIR, target)
         if not os.path.exists(target_path):
-            template_path = os.path.join(BASE_DIR, template)
+            template_path = os.path.join(RES_ROOT, template)
             if os.path.exists(template_path):
                 shutil.copyfile(template_path, target_path)
 
@@ -340,8 +348,10 @@ _AUTOSTART_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def _autostart_command():
-    """构造开机自启动命令：pythonw.exe + main.py（无控制台窗口）。"""
+    """构造开机自启动命令：打包后直接用 exe；源码运行用 pythonw.exe + main.py。"""
     import sys as _sys
+    if IS_FROZEN:
+        return '"%s"' % _sys.executable
     exe = _sys.executable
     if exe.lower().endswith("python.exe"):
         pythonw = os.path.join(os.path.dirname(exe), "pythonw.exe")

@@ -79,6 +79,9 @@ CITY_LOCATIONS = {
     "绍兴": {"id": "101210501", "lat": "30.03", "lon": "120.58"},
     "金华": {"id": "101210901", "lat": "29.08", "lon": "119.65"},
     "台州": {"id": "101210601", "lat": "28.66", "lon": "121.42"},
+    "临海": {"id": "101210610", "lat": "28.85", "lon": "121.14"},
+    "温岭": {"id": "101210611", "lat": "28.37", "lon": "121.37"},
+    "玉环": {"id": "101210612", "lat": "28.13", "lon": "121.23"},
     "中山": {"id": "101281701", "lat": "22.52", "lon": "113.39"},
     "江门": {"id": "101281101", "lat": "22.58", "lon": "113.08"},
     "湛江": {"id": "101281001", "lat": "21.27", "lon": "110.36"},
@@ -201,22 +204,40 @@ class WeatherWorker(QThread):
     #  自动定位（IP）
     # ------------------------------------------------------------------
     def _auto_locate(self):
-        """通过公网 IP 获取当前电脑的经纬度与城市。"""
+        """
+        通过公网 IP 获取当前电脑的经纬度与城市。
+        
+        Returns:
+            dict | None: 包含 lat, lon, city 的字典，失败返回 None
+        """
+        import requests
+        
         try:
-            import requests
-            resp = requests.get(self.IP_API, params={
-                "lang": "zh-CN",
-                "fields": "status,countryCode,regionName,city,lat,lon",
-            }, timeout=6)
-            data = resp.json()
-            if data.get("status") == "success" and data.get("lat") and data.get("lon"):
-                return {
-                    "lat": data["lat"],
-                    "lon": data["lon"],
-                    "city": data.get("city") or data.get("regionName") or "",
-                }
-        except Exception:
-            pass
+            response = requests.get(
+                self.IP_API,
+                params={
+                    "lang": "zh-CN",
+                    "fields": "status,countryCode,regionName,city,lat,lon"
+                },
+                timeout=6,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if data.get("status") == "success":
+                lat = data.get("lat")
+                lon = data.get("lon")
+                if lat is not None and lon is not None:
+                    return {
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "city": data.get("city") or data.get("regionName") or "未知城市",
+                    }
+                    
+        except Exception as e:
+            logger.debug(f"IP 定位失败: {e}")
+            
         return None
 
     @staticmethod

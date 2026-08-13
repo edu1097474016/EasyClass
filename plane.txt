@@ -1,0 +1,162 @@
+1.用户个人数据似乎没有保存好，在data下保存，自动创建
+2.毛玻璃材质需要修改下，新增亚克力材质亚克力材质：
+
+```
+transparent acrylic, clear plexiglass, glossy smooth surface, high light transmission, sharp reflections, crystal clear, polished edges, glass-like plastic, modernist material
+```
+
+毛玻璃材质：
+
+```
+frosted glass, etched glass surface, translucent matte finish, soft diffuse transmission, blurred background through glass, satin smooth texture, privacy glass, hazy see-through, elegant semi-transparent material
+```
+3.预警信息怎么轮播不出来了
+4.鼠标靠近反应的灵敏度也支持在设置面板中调整
+5.经纬度位置与自动定位之间似乎有矛盾
+6.不要用缓存信息了，要实时真实信息，有报错直接在灵动岛合适位置显示就行
+7.课程显示更灵动，比如以下是课程显示流程的核心逻辑实现提示词，按模块拆分，可直接用于AI编程助手或代码生成：
+
+---
+
+## 提示词1：核心状态判断函数
+
+```
+实现一个函数 getCourseStatus(currentTime, courseList)，输入当前时间和今日课程列表（每节课包含：课程名、教室、教师、开始时间、结束时间），输出当前状态对象，包含：
+- status: 'not_started' | 'teaching' | 'break' | 'ended'
+- currentCourse: 当前正在上的课（或下节课），若无则返回null
+- previousCourse: 刚结束的课（课间时使用）
+- nextCourse: 下一节课（课间时使用）
+- remainingCourses: 今日剩余的所有课程列表（从下节课开始）
+- countdownSeconds: 距下课/上课的剩余秒数
+- progress: 当前课的进度百分比（上课中时有效）
+
+处理逻辑：
+1. 若当前时间 < 第一节课开始时间 → status='not_started'，currentCourse=第一节课，countdown=距第一节课开始
+2. 若当前时间 >= 最后一节课结束时间 → status='ended'，所有课程相关字段为null
+3. 遍历课程列表，找到当前时间所在的区间：
+   a. 若在 [上课开始, 下课时间) 内 → status='teaching'，currentCourse=当前课，countdown=距下课
+   b. 若在 [下课时间, 下节课开始) 内 → status='break'，currentCourse=下节课，countdown=距下节课上课，remainingCourses=从下节课开始的所有课
+4. 所有时间比较使用时间戳（毫秒级），countdownSeconds为整数秒数
+5. progress计算：progress = (当前时间 - 上课开始) / (下课时间 - 上课开始) * 100，限制在0-100之间
+```
+
+---
+
+## 提示词2：倒计时格式化显示
+
+```
+实现一个函数 formatCountdown(seconds)，输入剩余秒数（整数），输出格式化的时间字符串，规则如下：
+- seconds <= 0 → 返回 "00:00"
+- seconds < 60 → 返回 "X秒"（如 "45秒"）
+- 60 <= seconds < 3600 → 返回 "MM:SS"（如 "28:35"）
+- seconds >= 3600 → 返回 "HH:MM:SS"（如 "01:23:45"）
+
+同时实现一个辅助函数 getProgressPercent(seconds, totalSeconds)，用于计算进度条的百分比（0-100），当状态为teaching时使用：
+- progress = (总时长 - 剩余秒数) / 总时长 * 100
+- 结果保留1位小数，限制在0-100之间
+- 总时长 = 下课时间 - 上课开始时间（秒）
+```
+
+---
+
+## 提示词3：课间轮播控制
+
+```
+实现一个课间轮播逻辑，当状态为 'break' 时：
+
+1. 轮播数据源：使用 getCourseStatus 返回的 remainingCourses 列表（从下节课开始的所有课）
+2. 轮播规则：
+   - 第1屏固定显示下节课（remainingCourses[0]）+ 距上课倒计时，停留5秒
+   - 第2屏显示下下节课（remainingCourses[1]），只显示课程名+时间+教室，停留3秒
+   - 第3屏显示下下下节课（remainingCourses[2]），停留3秒
+   - 以此类推，直到显示完剩余所有课程
+   - 全部显示完后，从头循环（回到第1屏）
+3. 特殊情况：
+   - 若 remainingCourses 只有1节课 → 只显示第1屏，不轮播
+   - 若 remainingCourses 为空 → 不显示轮播区域
+4. 轮播切换时，倒计时区域保持不变且持续更新（不倒计时暂停）
+5. 轮播切换使用淡入淡出动画（0.3秒过渡）
+6. 用户可手动点击左右箭头切换轮播（此时自动轮播暂停5秒后恢复）
+```
+
+---
+
+## 提示词4：状态自动切换触发器
+
+```
+实现一个定时器管理模块，用于自动检测和切换课程状态：
+
+1. 设置一个每秒执行的定时器（setInterval 1000ms）
+2. 每次执行时：
+   a. 获取当前时间
+   b. 调用 getCourseStatus 获取最新状态
+   c. 对比上一次的状态，若状态发生变化（如 teaching → break），触发状态变更回调
+   d. 更新倒计时显示（每秒刷新）
+   e. 更新进度条（teaching状态时）
+3. 关键节点提前预警：
+   - 距下课/上课剩余60秒时，触发一次提醒回调（可用于播放提示音或弹窗）
+   - 状态切换瞬间（倒计时归零时），立即刷新界面，无需等待下一秒定时器
+4. 优化：使用 requestAnimationFrame 或精确计时，避免setInterval累积误差
+5. 页面可见性变化时（切换标签页），回来时立即同步一次最新时间，避免时间跳跃
+```
+
+---
+
+## 提示词5：界面数据绑定（以Vue为例）
+
+```
+基于上述逻辑，实现一个课程显示组件（Vue 3 Composition API）：
+
+1. 响应式数据：
+   - status: ref<string>
+   - displayCourse: ref<object>（当前要显示的课程，根据状态和轮播决定）
+   - countdownText: ref<string>（格式化后的倒计时）
+   - progress: ref<number>（进度条百分比）
+   - carouselIndex: ref<number>（轮播当前索引）
+   - remainingList: ref<array>（剩余课程列表）
+
+2. 计算属性：
+   - statusText: 状态对应的中文文本（'未到课'|'上课中'|'课间休息'|'已结束'）
+   - statusIcon: 状态对应的图标（🌅|📚|☕|✅）
+   - countdownColor: 倒计时颜色（<5分钟红色，<15分钟橙色，其他绿色）
+
+3. 方法：
+   - updateStatus(): 核心更新逻辑，调用 getCourseStatus
+   - startCarousel(): 课间时启动轮播
+   - stopCarousel(): 退出课间时停止轮播
+   - onStatusChange(oldStatus, newStatus): 状态切换时的副作用处理（如重置轮播索引、播放提示音）
+
+4. 生命周期：
+   - onMounted: 初始化状态，启动定时器，启动轮播（若需要）
+   - onUnmounted: 清除所有定时器
+   - watch: 监听 status 变化，自动启动/停止轮播
+```
+
+---
+
+## 提示词6：完整HTML/CSS/JS单页实现
+
+```
+请生成一个完整的HTML文件，包含CSS样式和JavaScript逻辑，实现课程显示面板：
+
+一、视觉设计：
+- 深色渐变背景（#1a1a2e → #16213e）
+- 毛玻璃效果的主卡片（背景模糊+半透明）
+- 大号数字倒计时（粗体，显眼）
+- 进度条（渐变色，上课时动态填充）
+- 课程信息卡片（课程名、教室、教师分三行展示）
+- 轮播区域（课间时显示在下方，带左右箭头）
+- 响应式适配（桌面/平板/手机）
+
+二、交互逻辑：
+1. 状态切换时界面平滑过渡（颜色/文字/图标变化）
+2. 倒计时每秒更新，带数字跳动效果
+3. 进度条平滑填充动画（transition）
+4. 轮播自动切换（课间时），带淡入淡出
+5. 手动点击箭头可切换轮播
+
+以上提示词可直接复制到AI对话中，按需组合使用。建议顺序：提示词1 → 提示词2 → 提示词4 → 提示词3 → 提示词5 → 提示词6，从底层逻辑到界面实现逐步完成。
+我随便找的，你整个类似的逻辑，样式不要听他的
+8.去掉显示教室功能包括设置项
+9.支持自己导入文字并应用
+10.程序一开始时先显示灵动岛
