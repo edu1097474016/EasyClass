@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="favicon.ico" width="70" align="middle" style="margin-right: 15px;">
+  <img src="favicon.ico" width="100" align="middle" style="margin-right: 15px;">
   <h1>易课 EasyClass v1.0.0 | Silicon UI</h1>
     <img src="https://img.shields.io/badge/版本-1.0.0-blue">
     <img src="https://img.shields.io/badge/许可证-MIT-green">
