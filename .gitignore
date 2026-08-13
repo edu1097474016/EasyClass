@@ -6,6 +6,7 @@ data/
 config.json
 schedule.json
 weather_cache.json
+EasyClass.mp4
 
 # 个人信息 / 密钥（防止误提交）
 *.key
