@@ -49,7 +49,7 @@ python main.py
 
 >**注意**：和风天气API只有部分服务是免费的，其他服务可能会要钱，但是基础功能可用，建议先了解下
 
-### ☑LocationID获取以及填写指南
+## ☑LocationID获取以及填写指南
 
 `获取`：
 - **方法 1**：
@@ -73,7 +73,7 @@ python main.py
 | lat | 字符串 | 纬度（小数） | "39.90" |
 | lon | 字符串 | 经度（小数） | "116.41" |
 
-### ☆打包为独立 exe
+## ☆打包为独立 exe
 
 ```bash
 pip install pyinstaller
