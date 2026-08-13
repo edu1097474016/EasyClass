@@ -173,6 +173,45 @@ class AdminWindow(QMainWindow):
         if self.stack.currentIndex() == 0:
             self._refresh_dashboard()
 
+    def _refresh_weather_with_toast(self):
+        """刷新天气并用 Toast 提示结果（成功/失败），与托盘刷新保持一致。"""
+        def once_ok(data):
+            self._unhook_weather_toast(once_ok, once_fail)
+            try:
+                city = data.get("city", "未知")
+                temp = data.get("temp", "--")
+                text = data.get("text", "")
+                suffix = " %s" % text if text else ""
+                show_toast("天气刷新成功：%s %s°C%s" % (city, temp, suffix))
+            except Exception:
+                pass
+
+        def once_fail(info):
+            self._unhook_weather_toast(once_ok, once_fail)
+            try:
+                show_toast("天气刷新失败：%s" % info.get("message", "网络异常"),
+                           success=False)
+            except Exception:
+                pass
+
+        try:
+            self.weather.updated.connect(once_ok)
+            self.weather.failed.connect(once_fail)
+        except Exception:
+            return
+        self.weather.refresh(force=True)
+
+    def _unhook_weather_toast(self, once_ok, once_fail):
+        """解除本次刷新的一次性连接，避免重复点击造成连接堆积。"""
+        try:
+            self.weather.updated.disconnect(once_ok)
+        except Exception:
+            pass
+        try:
+            self.weather.failed.disconnect(once_fail)
+        except Exception:
+            pass
+
     def _scroll_page(self, builder):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -276,7 +315,7 @@ class AdminWindow(QMainWindow):
         self._btn_toggle_island = QPushButton("隐藏灵动岛")
         self._btn_toggle_island.clicked.connect(self._toggle_island)
         btn_refresh = QPushButton("刷新天气")
-        btn_refresh.clicked.connect(lambda: self.weather.refresh(force=True))
+        btn_refresh.clicked.connect(self._refresh_weather_with_toast)
         btn_editor = QPushButton("打开课程表编辑器")
         btn_editor.setProperty("class", "primary")
         btn_editor.clicked.connect(self._open_editor)
@@ -867,7 +906,7 @@ class AdminWindow(QMainWindow):
         self._weather_status.setProperty("class", "setting-hint")
         cl.addWidget(self._weather_status)
         refresh_btn = QPushButton("立即刷新天气")
-        refresh_btn.clicked.connect(lambda: self.weather.refresh(force=True))
+        refresh_btn.clicked.connect(self._refresh_weather_with_toast)
         cl.addWidget(refresh_btn)
         self._update_weather_status()
 

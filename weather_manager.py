@@ -267,12 +267,16 @@ class WeatherWorker(QThread):
                     city_name = located.get("city", "")
                 logger.info("天气定位成功(IP): 城市=%s 经纬度=%s,%s", city_name, lat, lon)
 
-            if lat is None:
+            # 统一位置基准：城市名在表内一律用表内(城市中心)坐标，
+            # 保证 IP 定位与手动填写同一城市时天气一致，且以更准的城市中心天气为准
+            loc = self._city_lookup(city_name) if city_name else None
+            if not loc and lat is None:
                 loc = self._city_lookup(self.city)
                 if not loc:
                     logger.warning("天气刷新失败：未收录城市 %s", self.city)
                     self.fail.emit({"message": "未收录城市：%s，请在天气设置中重新指定" % self.city})
                     return
+            if loc:
                 lat, lon = loc["lat"], loc["lon"]
                 city_name = city_name or self.city
                 logger.info("天气定位成功(城市表): 城市=%s 经纬度=%s,%s", city_name, lat, lon)
@@ -281,8 +285,8 @@ class WeatherWorker(QThread):
             city_loc = self._city_lookup(city_name) or self._city_lookup(self.city)
             location_id = (city_loc or CITY_LOCATIONS["北京"])["id"]
             city_name = city_name or self.city or "北京"
-            # 有真实经纬度（IP 定位）时，天气/预报/指数直接用 "经度,纬度" 查询，保证位置一致
-            location_param = "%s,%s" % (lon, lat) if lat and lon else location_id
+            # 城市名在表内用 LocationID（与手动填写完全一致）；表外城市用 IP 经纬度查询
+            location_param = location_id if city_loc else ("%s,%s" % (lon, lat) if lat and lon else location_id)
 
             # 3. 实时天气
             now = self._get(self.NOW_PATH, {"location": location_param})
