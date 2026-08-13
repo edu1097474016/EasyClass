@@ -1,4 +1,11 @@
-# 易课 EasyClass v1.0.0 | Silicon UI
+<table>
+  <tr>
+    <td><img src="favicon.ico" width="70"></td>
+    <td>
+      <h1 align="center">易课 EasyClass v1.0.0 | Silicon UI</h1>
+    </td>
+  </tr>
+</table>
 
 > 基于 **Python + PySide6** 的 Windows 桌面灵动岛（Dynamic Island）教室信息看板。
 
