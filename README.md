@@ -3,11 +3,12 @@
   <h1>易课 EasyClass v1.0.0 | Silicon UI</h1>
     <img src="https://img.shields.io/badge/版本-1.0.0-blue">
     <img src="https://img.shields.io/badge/许可证-MIT-green">
-    <img src="https://img.shields.io/badge/注意-AI Slop-red">
   </p>
 </div>
 
 > 基于 **Python + PySide6** 的 Windows 桌面灵动岛（Dynamic Island）教室信息看板。
+
+>AI Slop 
 
 ## ✨ 功能特性
 
@@ -48,7 +49,7 @@ python main.py
 
 >**注意**：和风天气API只有部分服务是免费的，其他服务可能会要钱，但是基础功能可用，建议先了解下
 
-### LocationID获取以及填写指南
+### ☑LocationID获取以及填写指南
 
 `获取`：
 - **方法 1**：
@@ -72,7 +73,7 @@ python main.py
 | lat | 字符串 | 纬度（小数） | "39.90" |
 | lon | 字符串 | 经度（小数） | "116.41" |
 
-### 打包为独立 exe
+### ☆打包为独立 exe
 
 ```bash
 pip install pyinstaller
