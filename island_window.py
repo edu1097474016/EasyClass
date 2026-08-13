@@ -556,6 +556,7 @@ class IslandWindow(QWidget):
         self._glass_style = config.get("island_glass_style", "auto")
         self._glass_custom = config.get("island_glass_custom", "#1E202D")
         self._material = config.get("island_material", "frosted")
+        self._shape = config.get("island_shape", "rect")
         self._opacity = float(config.get("opacity", 0.9))
         self._course_full_text = "今日无课程安排"
         self._warnings = []
@@ -970,10 +971,17 @@ class IslandWindow(QWidget):
             return "rgba(255, 255, 255, %s)" % alpha
         return "rgba(30, 30, 40, %s)" % alpha
 
+    def _corner_radius(self):
+        """返回背景圆角半径：胶囊 = 高度一半；矩形 = 0。"""
+        if self._shape == "capsule":
+            return max(0, self.height() // 2)
+        return 0
+
     def _apply_glass_bg(self):
         if hasattr(self, "bg_frame"):
             self.bg_frame.setStyleSheet(
-                "background-color: %s; border: none; border-radius: 0px;" % self._glass_bg())
+                "background-color: %s; border: none; border-radius: %dpx;"
+                % (self._glass_bg(), self._corner_radius()))
 
     def _apply_material(self):
         """应用当前材质：亚克力=系统级 DWM 模糊；毛玻璃=控件级 QGraphicsBlur。"""
@@ -1009,6 +1017,17 @@ class IslandWindow(QWidget):
             self._material = material
             self._apply_material()
             logger.info("灵动岛材质切换: %s", material)
+
+    def shape(self):
+        return self._shape
+
+    def set_shape(self, shape):
+        """设置灵动岛外形：rect（矩形）/ capsule（胶囊圆角）。"""
+        shape = "capsule" if shape == "capsule" else "rect"
+        if shape != self._shape:
+            self._shape = shape
+            self._apply_glass_bg()
+            logger.info("灵动岛形状切换: %s", shape)
 
     # ==================================================================
     #  屏幕适配（多显示器 / 热插拔）
@@ -1536,6 +1555,7 @@ class IslandWindow(QWidget):
     # ==================================================================
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._apply_glass_bg()
         self._apply_adaptive_visibility()
 
     def showEvent(self, event):

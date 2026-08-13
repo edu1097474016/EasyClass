@@ -8,7 +8,7 @@
 - **每日一言**：轮播 Hitokoto 一言，刷新间隔可在管理后台调节
 - **全面自适应**：按屏幕 DPI 与分辨率动态缩放（1024×768 ~ 8K），支持屏幕热插拔 / 多显示器
 - **深色 / 浅色主题**：两套 QSS 一键切换（`ThemeManager` 动态加载，无需重启），支持自定义主题色
-- **灵动岛材质**：毛玻璃 / 亚克力两种材质一键切换，可自定义玻璃底色
+- **灵动岛材质与形状**：毛玻璃 / 亚克力两种材质一键切换，可自定义玻璃底色；外形支持矩形与胶囊（两端圆角）
 - **智能课程判断**：正在上课 / 下课休息 / 下节课提前 10 分钟预告 / 周末无课
 - **天气看板**：和风天气 API，30 分钟自动刷新；支持公网 IP 自动定位 / 手动填城市。同一城市两种方式统一使用内置城市表（城市中心坐标 + LocationID）查询，天气保持一致且更准；未收录城市可通过 `weather_manager.py` 的 `CITY_LOCATIONS` 表自行扩充
 - **丰富天气数据**：实时天气 + 空气质量 AQI（等级着色）+ 天气预警（按预警等级颜色区分、优先展示）+ 7 天预报 + 24 小时 + 分钟级降水 + 生活指数，矢量图标显示在温度左侧
@@ -79,6 +79,7 @@ pyinstaller EasyClass.spec
   "island_glass_style": "auto",
   "island_glass_custom": "#1E202D",
   "island_material": "frosted",
+  "island_shape": "rect",
   "island_fullscreen": false,
   "island_passthrough": false,
   "island_screen": 0,

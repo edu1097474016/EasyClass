@@ -12,6 +12,7 @@
   "island_glass_style": "auto",
   "island_glass_custom": "#1E202D",
   "island_material": "frosted",
+  "island_shape": "rect",
   "island_fullscreen": false,
   "island_passthrough": false,
   "island_screen": 0,

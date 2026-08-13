@@ -550,6 +550,17 @@ class AdminWindow(QMainWindow):
         self.glass_color_btn.setVisible(style == "custom")
         cl.addWidget(self.glass_color_btn)
 
+        cl = self._card(layout, "形状")
+        self.shape_combo = QComboBox()
+        self.shape_combo.addItem("矩形（直角）", "rect")
+        self.shape_combo.addItem("胶囊（两端圆角）", "capsule")
+        shape = self.config.get("island_shape", "rect")
+        sidx = self.shape_combo.findData(shape)
+        self.shape_combo.setCurrentIndex(sidx if sidx >= 0 else 0)
+        self.shape_combo.currentIndexChanged.connect(self._on_shape_changed)
+        self._row(cl, "外形", self.shape_combo,
+                  "胶囊外形两端为半圆，更贴合灵动岛风格；矩形保持直角")
+
         cl = self._card(layout, "显示模式")
         self.fullscreen_switch = ToggleSwitch()
         self.fullscreen_switch.set_checked_animated(
@@ -717,6 +728,14 @@ class AdminWindow(QMainWindow):
             self.material_combo.blockSignals(True)
             self.material_combo.setCurrentIndex(midx if midx >= 0 else 0)
             self.material_combo.blockSignals(False)
+        if hasattr(self, "shape_combo"):
+            shape = getattr(self.island, "shape", lambda: self.config.get("island_shape", "rect"))
+            if callable(shape):
+                shape = shape()
+            sidx = self.shape_combo.findData(shape)
+            self.shape_combo.blockSignals(True)
+            self.shape_combo.setCurrentIndex(sidx if sidx >= 0 else 0)
+            self.shape_combo.blockSignals(False)
         if hasattr(self, "margin_slider"):
             self.margin_slider.blockSignals(True)
             self.margin_slider.setValue(self.island.hover_margin())
@@ -742,6 +761,13 @@ class AdminWindow(QMainWindow):
         self.config["island_material"] = material
         if self.island is not None:
             self.island.set_material(material)
+        utils.save_config(self.config)
+
+    def _on_shape_changed(self, index):
+        shape = self.shape_combo.itemData(index)
+        self.config["island_shape"] = shape
+        if self.island is not None:
+            self.island.set_shape(shape)
         utils.save_config(self.config)
 
     def _on_margin_changed(self, value):
