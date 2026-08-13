@@ -162,7 +162,7 @@ def main():
         utils.save_config(config)
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.information(
-            None, "欢迎使用 易课 EasyClass",
+            None, "欢迎使用 易课 EasyClass awa",
             "首次使用，请先完成基础设置：\n\n"
             "1. 天气：在「设置 → 天气」中填入和风天气 API Key\n"
             "2. 课程表：在「设置 → 课程表」中编辑或导入课表\n\n"
