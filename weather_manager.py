@@ -441,19 +441,20 @@ class WeatherManager(QObject):
         self.city = self.config.get("weather_city", "北京")
         self.api_host = self.config.get("api_host", "https://api.qweather.com")
         self.auto_locate = bool(self.config.get("auto_locate", True))
+        self.refresh_minutes = max(1, int(self.config.get("weather_refresh_minutes", 30)))
         self._worker = None
         self._cooldown_until = 0.0
         self.cache = None   # 仅内存保留最近一次成功数据，失败不兜底显示
 
         self.timer = QTimer(self)
-        self.timer.setInterval(self.AUTO_REFRESH_MS)
+        self.timer.setInterval(self.refresh_minutes * 60 * 1000)
         self.timer.timeout.connect(self.refresh)
 
     # ------------------------------------------------------------------
     #  生命周期
     # ------------------------------------------------------------------
     def start(self):
-        """启动天气管理：立即刷新一次 + 开启 30 分钟定时器。"""
+        """启动天气管理：立即刷新一次 + 开启定时刷新。"""
         self.refresh()
         self.timer.start()
 
@@ -481,6 +482,11 @@ class WeatherManager(QObject):
         self._worker.start()
         logger.info("天气刷新已发起: 城市=%s 自动定位=%s", self.city, self.auto_locate)
 
+    def set_refresh_minutes(self, minutes):
+        """设置天气自动刷新间隔（分钟），实时生效。"""
+        self.refresh_minutes = max(1, int(minutes))
+        self.timer.setInterval(self.refresh_minutes * 60 * 1000)
+
     def update_config(self, config):
         """设置/天气页保存后更新配置并立刻刷新。"""
         self.config = config
@@ -488,7 +494,9 @@ class WeatherManager(QObject):
         self.city = config.get("weather_city", "北京")
         self.api_host = config.get("api_host", "https://api.qweather.com")
         self.auto_locate = bool(config.get("auto_locate", True))
-        logger.info("天气配置已更新: 城市=%s 自动定位=%s", self.city, self.auto_locate)
+        self.set_refresh_minutes(config.get("weather_refresh_minutes", 30))
+        logger.info("天气配置已更新: 城市=%s 自动定位=%s 刷新=%d分钟",
+                    self.city, self.auto_locate, self.refresh_minutes)
         self.refresh()
 
     # ------------------------------------------------------------------

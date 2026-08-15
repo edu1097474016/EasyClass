@@ -238,6 +238,7 @@ def load_config():
         "weather_city": "北京",
         "api_host": "https://api.qweather.com",
         "auto_locate": True,
+        "weather_refresh_minutes": 30,
         "opacity": 0.65,
         "password": "admin123",
         "api_provider": "hefeng",
@@ -256,6 +257,7 @@ def load_config():
         "course_progress_height": 3,
         "hitokoto_category": "",
         "hitokoto_refresh_minutes": 15,
+        "text_mode": "scroll",
         "theme": "dark",
         "theme_color": "#40916C",
     }

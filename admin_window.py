@@ -508,6 +508,19 @@ class AdminWindow(QMainWindow):
     def _build_island(self, layout):
         self._header(layout, "设置 / 灵动岛", "灵动岛")
 
+        cl = self._card(layout, "文字显示方式")
+        self.text_mode_combo = QComboBox()
+        self.text_mode_combo.addItem("滚动显示（跑马灯）", "scroll")
+        self.text_mode_combo.addItem("遮挡显示（省略截断）", "elide")
+        tm = self.config.get("text_mode", "scroll")
+        tidx = self.text_mode_combo.findData(tm)
+        self.text_mode_combo.setCurrentIndex(tidx if tidx >= 0 else 0)
+        self.text_mode_combo.currentIndexChanged.connect(self._on_text_mode_changed)
+        self._row(cl, "文字显示方式", self.text_mode_combo,
+                  "仅用于处理每日一言与天气预警的过长文字："
+                  "滚动=超宽时自动滚动显示全文（一言显示出处）；"
+                  "遮挡=按原算法省略截断（一言限21字内、不显示出处；预警右对齐省略）")
+
         cl = self._card(layout, "宽度比例")
         self.width_slider = QSlider(Qt.Horizontal)
         self.width_slider.setRange(50, 100)
@@ -794,6 +807,13 @@ class AdminWindow(QMainWindow):
         if self.island is not None:
             self.island.set_hitokoto_refresh(value)
 
+    def _on_text_mode_changed(self, index):
+        mode = self.text_mode_combo.itemData(index)
+        self.config["text_mode"] = mode
+        if self.island is not None:
+            self.island.set_text_mode(mode)
+        utils.save_config(self.config)
+
     def _refresh_font_status(self):
         if not hasattr(self, "_font_status"):
             return
@@ -877,12 +897,15 @@ class AdminWindow(QMainWindow):
         self.config["hover_hide_interval"] = self.interval_slider.value()
         self.config["course_progress_height"] = self.progress_slider.value()
         self.config["hitokoto_refresh_minutes"] = self.hitokoto_refresh_slider.value()
+        self.config["text_mode"] = self.text_mode_combo.itemData(
+            self.text_mode_combo.currentIndex())
         if self.island is not None:
             self.island.set_width_ratio(ratio)
             self.island.set_hover_margin(self.margin_slider.value())
             self.island.set_hover_interval(self.interval_slider.value())
             self.island.set_progress_height(self.progress_slider.value())
             self.island.set_hitokoto_refresh(self.hitokoto_refresh_slider.value())
+            self.island.set_text_mode(self.config["text_mode"])
         utils.save_config(self.config)
         logger.info("灵动岛设置已保存: 宽度=%.0f%% 材质=%s 进度条=%dpx 一言刷新=%d分钟",
                     ratio * 100, self.config.get("island_material", "frosted"),
@@ -924,6 +947,26 @@ class AdminWindow(QMainWindow):
         self.key_edit.setFixedWidth(s(320))
         self._row(cl, "API Key", self.key_edit)
 
+        self.weather_refresh_slider = QSlider(Qt.Horizontal)
+        self.weather_refresh_slider.setRange(5, 120)
+        self.weather_refresh_slider.setValue(
+            int(self.config.get("weather_refresh_minutes", 30)))
+        self._weather_refresh_value = QLabel()
+        self._weather_refresh_value.setProperty("class", "setting-hint")
+        self.weather_refresh_slider.valueChanged.connect(self._on_weather_refresh_changed)
+        self._weather_refresh_value.setText(
+            "%d 分钟" % self.weather_refresh_slider.value())
+        wrow = QHBoxLayout()
+        wrow.addWidget(QLabel("自动刷新频率"))
+        wrow.addStretch(1)
+        wrow.addWidget(self._weather_refresh_value)
+        cl.addLayout(wrow)
+        cl.addWidget(self.weather_refresh_slider)
+        hint = QLabel("天气数据自动刷新间隔（分钟），保存后立即生效。")
+        hint.setProperty("class", "setting-hint")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
+
         self._sync_auto_locate_controls()
 
         cl = self._card(layout, "天气状态")
@@ -945,19 +988,26 @@ class AdminWindow(QMainWindow):
     def _on_auto_locate_toggled(self, checked):
         self._sync_auto_locate_controls()
 
+    def _on_weather_refresh_changed(self, value):
+        self._weather_refresh_value.setText("%d 分钟" % value)
+        self.config["weather_refresh_minutes"] = value
+        if self.weather is not None:
+            self.weather.set_refresh_minutes(value)
+
     def _save_weather(self):
         self.config["weather_city"] = self.city_edit.text().strip() or "北京"
         self.config["weather_api_key"] = self.key_edit.text().strip()
         host = self.host_edit.text().strip()
         self.config["api_host"] = host or "https://api.qweather.com"
         self.config["auto_locate"] = self.auto_locate_switch.isChecked()
+        self.config["weather_refresh_minutes"] = self.weather_refresh_slider.value()
         self.config.pop("weather_coords", None)
         utils.save_config(self.config)
         self.weather.update_config(self.config)
         self._refresh_dashboard()
-        logger.info("天气设置已保存: 城市=%s 自动定位=%s host=%s",
+        logger.info("天气设置已保存: 城市=%s 自动定位=%s host=%s 刷新=%d分钟",
                     self.config.get("weather_city"), self.config.get("auto_locate"),
-                    self.config.get("api_host"))
+                    self.config.get("api_host"), self.config.get("weather_refresh_minutes"))
         show_toast("天气设置已保存")
 
     def _update_weather_status(self):

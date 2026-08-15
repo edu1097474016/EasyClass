@@ -4,8 +4,9 @@
 #  -------------------------------------------------------------------------
 #  职责：
 #   · 后台线程请求 https://v1.hitokoto.cn/ 获取随机句子（免费、无需 API Key）
-#   · 按最大字数筛选：句子+出处总长超过 max_len 的丢弃；出处过长则只保留句子
-#   · 一次获取一批（count 条合格句子），供程序启动时预缓存
+#   · max_len>0（遮挡模式）：只取句子+书名号总长 <= max_len 的短句，不带出处
+#   · max_len=0（滚动模式）：不限制字数，保留出处（from）字段
+#   · 一次获取一批（count 条句子），供程序启动时预缓存
 #   · 失败静默，不影响主界面
 # ==========================================================================
 
@@ -17,30 +18,31 @@ logger = logging.getLogger(__name__)
 
 
 class HitokotoFetcher(QThread):
-    """后台批量获取经过字数筛选的一言句子。"""
+    """后台批量获取一言句子（遮挡模式限字数、滚动模式不限并保留出处）。"""
 
-    ok = Signal(list)       # 合格句子列表：[{'hitokoto':..., 'from':...}, ...]
+    ok = Signal(list)       # 句子列表：[{'hitokoto':..., 'from':...}, ...]
     fail = Signal(str)      # 失败原因
 
     URL = "https://v1.hitokoto.cn/"
     TIMEOUT = 8
 
-    def __init__(self, category="", count=5, max_len=21, parent=None):
+    def __init__(self, category="", count=5, max_len=0, parent=None):
         super().__init__(parent)
         self.category = (category or "").strip()
         self.count = max(1, int(count))
-        self.max_len = max(4, int(max_len))
+        self.max_len = max(0, int(max_len))
 
     @staticmethod
     def _acceptable(data, max_len):
-        """判断一条句子是否放得下（只算句子 + 书名号，<= max_len 字）。"""
+        """提取一条句子。max_len>0 时限制在 21 字以内（不带出处）；否则保留出处。"""
         sentence = (data.get("hitokoto") or "").strip()
         if not sentence:
             return None
-        plain = "「%s」" % sentence
-        if len(plain) <= max_len:
+        if max_len > 0:
+            if len("「%s」" % sentence) > max_len:
+                return None
             return {"hitokoto": sentence, "from": ""}
-        return None
+        return {"hitokoto": sentence, "from": (data.get("from") or "").strip()}
 
     def run(self):
         import requests
@@ -68,5 +70,5 @@ class HitokotoFetcher(QThread):
                 logger.warning("一言请求异常: %s", type(exc).__name__)
                 break
         if got == 0:
-            logger.warning("一言获取失败：未取到合格字数的句子（max_len=%d）", self.max_len)
-            self.fail.emit("no fit quote")
+            logger.warning("一言获取失败：未取到句子（max_len=%d）", self.max_len)
+            self.fail.emit("no quote")
