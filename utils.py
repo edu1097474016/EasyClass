@@ -7,6 +7,7 @@
 #   · 配置读写：config.json / schedule.json / weather_cache.json
 #   · 通用控件工厂：阴影效果、iOS 开关、全局热键
 #   · Windows 毛玻璃（Acrylic）支持
+#   · 跨平台开机自启动：Windows / Linux / macOS
 # ==========================================================================
 
 import os
@@ -16,6 +17,7 @@ import re
 import shutil
 import ctypes
 import logging
+import platform
 
 from PySide6.QtCore import (
     Qt, QRect, QPoint, QObject, QEvent, Signal, Property,
@@ -29,8 +31,14 @@ from PySide6.QtWidgets import (
 
 # ---------------- 应用元信息 ----------------
 APP_NAME = "易课"
+APP_ID = "com.easyclass.app"  # 用于 Linux .desktop 文件
 APP_VERSION = "1.0.0"
 APP_TAG = "易课 EasyClass v1.0.0 | Silicon UI"
+
+# 检测运行平台
+IS_WINDOWS = platform.system() == "Windows"
+IS_LINUX = platform.system() == "Linux"
+IS_MAC = platform.system() == "Darwin"
 
 # 项目根目录（与各 .py 模块同级）
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -180,17 +188,20 @@ def make_font(size_pt, bold=False):
 
 def is_os_dark():
     """探测系统当前是否为深色模式（用于首次启动默认主题）。"""
-    try:
-        import winreg
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-        )
-        value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-        winreg.CloseKey(key)
-        return value == 0
-    except Exception:
-        return True
+    if IS_WINDOWS:
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            )
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            winreg.CloseKey(key)
+            return value == 0
+        except Exception:
+            return True
+    # Linux / macOS 暂不探测，默认深色
+    return True
 
 
 # ==========================================================================
@@ -324,6 +335,8 @@ def enable_acrylic(window, abgr=0xD82D201E):
     失败时静默忽略（仍保留 rgba 半透明玻璃质感）。
     abgr 参数格式为 0xAABBGGRR。
     """
+    if not IS_WINDOWS:
+        return
     try:
         hwnd = int(window.winId())
         _set_accent_state(hwnd, 4, 2, abgr)   # 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND
@@ -333,6 +346,8 @@ def enable_acrylic(window, abgr=0xD82D201E):
 
 def disable_acrylic(window):
     """关闭 DWM 亚克力模糊（AccentState=0），用于切回毛玻璃材质。"""
+    if not IS_WINDOWS:
+        return
     try:
         hwnd = int(window.winId())
         _set_accent_state(hwnd, 0, 0, 0)
@@ -341,49 +356,105 @@ def disable_acrylic(window):
 
 
 # ==========================================================================
-#  开机自启动（Windows 注册表 Run 项）
+#  开机自启动（跨平台）
 # ==========================================================================
 
-_AUTOSTART_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-
-
-def _autostart_command():
-    """构造开机自启动命令：打包后直接用 exe；源码运行用 pythonw.exe + main.py。"""
-    import sys as _sys
+def _get_autostart_command():
+    """获取当前程序的自启动命令（跨平台）。"""
     if IS_FROZEN:
-        return '"%s"' % _sys.executable
-    exe = _sys.executable
-    if exe.lower().endswith("python.exe"):
-        pythonw = os.path.join(os.path.dirname(exe), "pythonw.exe")
-        if os.path.exists(pythonw):
-            exe = pythonw
-    main_py = os.path.join(BASE_DIR, "main.py")
-    return '"%s" "%s"' % (exe, main_py)
+        # 打包后的 exe / 可执行文件
+        return f'"{sys.executable}"'
+    else:
+        # 源码运行
+        if IS_WINDOWS:
+            exe = sys.executable
+            if exe.lower().endswith("python.exe"):
+                pythonw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+                if os.path.exists(pythonw):
+                    exe = pythonw
+            main_py = os.path.join(BASE_DIR, "main.py")
+            return f'"{exe}" "{main_py}"'
+        elif IS_LINUX or IS_MAC:
+            return f'"{sys.executable}" "{os.path.join(BASE_DIR, "main.py")}"'
+        else:
+            return f'"{sys.executable}" "{os.path.join(BASE_DIR, "main.py")}"'
 
 
 def autostart_enabled():
-    """查询开机自启动是否已启用（读取注册表 Run 项）。"""
-    try:
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_RUN_KEY, 0, winreg.KEY_READ)
+    """
+    查询开机自启动是否已启用（跨平台）。
+    - Windows: 读取注册表 Run 项
+    - Linux: 检查 ~/.config/autostart/ 下是否存在 .desktop 文件
+    - macOS: 检查 ~/Library/LaunchAgents/ 下是否存在 .plist 文件
+    """
+    if IS_WINDOWS:
         try:
-            value, _ = winreg.QueryValueEx(key, APP_NAME)
-            return bool(value and value.strip())
-        finally:
-            winreg.CloseKey(key)
-    except Exception:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                                0, winreg.KEY_READ)
+            try:
+                value, _ = winreg.QueryValueEx(key, APP_NAME)
+                return bool(value and value.strip())
+            finally:
+                winreg.CloseKey(key)
+        except Exception:
+            return False
+
+    elif IS_LINUX:
+        autostart_dir = os.path.expanduser("~/.config/autostart")
+        desktop_path = os.path.join(autostart_dir, f"{APP_ID}.desktop")
+        if os.path.exists(desktop_path):
+            try:
+                with open(desktop_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    return "Exec=" in content and APP_NAME in content
+            except Exception:
+                pass
         return False
+
+    elif IS_MAC:
+        launch_dir = os.path.expanduser("~/Library/LaunchAgents")
+        plist_path = os.path.join(launch_dir, f"{APP_ID}.plist")
+        if os.path.exists(plist_path):
+            try:
+                import plistlib
+                with open(plist_path, "rb") as f:
+                    data = plistlib.load(f)
+                    return data.get("Label") == APP_ID
+            except Exception:
+                pass
+        return False
+
+    return False
 
 
 def set_autostart(enabled):
-    """启用/禁用开机自启动（写入/删除 HKCU Run 注册表项）。"""
+    """
+    启用/禁用开机自启动（跨平台）。
+    - Windows: 写入/删除 HKCU Run 注册表项
+    - Linux: 创建/删除 ~/.config/autostart/*.desktop 文件
+    - macOS: 创建/删除 ~/Library/LaunchAgents/*.plist 文件
+    """
+    if IS_WINDOWS:
+        _set_autostart_windows(enabled)
+    elif IS_LINUX:
+        _set_autostart_linux(enabled)
+    elif IS_MAC:
+        _set_autostart_macos(enabled)
+
+
+def _set_autostart_windows(enabled):
+    """Windows 注册表自启动。"""
     try:
         import winreg
         key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, _AUTOSTART_RUN_KEY, 0, winreg.KEY_SET_VALUE)
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE)
         try:
             if enabled:
-                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, _autostart_command())
+                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, _get_autostart_command())
             else:
                 try:
                     winreg.DeleteValue(key, APP_NAME)
@@ -391,8 +462,98 @@ def set_autostart(enabled):
                     pass
         finally:
             winreg.CloseKey(key)
+        logging.getLogger(__name__).info(f"Windows 自启动 {'启用' if enabled else '禁用'}: {APP_NAME}")
     except Exception as exc:
-        logging.getLogger(__name__).warning("开机自启动设置失败: %s", exc)
+        logging.getLogger(__name__).warning(f"Windows 自启动设置失败: {exc}")
+
+
+def _set_autostart_linux(enabled):
+    """Linux XDG Autostart (.desktop 文件)。"""
+    autostart_dir = os.path.expanduser("~/.config/autostart")
+    os.makedirs(autostart_dir, exist_ok=True)
+    desktop_path = os.path.join(autostart_dir, f"{APP_ID}.desktop")
+
+    if enabled:
+        # 查找图标文件
+        icon_path = os.path.join(RES_ROOT, "favicon.ico")
+        if not os.path.exists(icon_path):
+            icon_path = ""
+
+        content = f"""[Desktop Entry]
+Type=Application
+Name={APP_NAME}
+Comment={APP_NAME} - 教室信息看板
+Exec={_get_autostart_command()}
+Icon={icon_path}
+Terminal=false
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+Categories=Utility;
+"""
+        try:
+            with open(desktop_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            # 设置可执行权限
+            os.chmod(desktop_path, 0o755)
+            logging.getLogger(__name__).info(f"Linux 自启动已启用: {desktop_path}")
+        except Exception as exc:
+            logging.getLogger(__name__).warning(f"Linux 自启动创建失败: {exc}")
+    else:
+        try:
+            if os.path.exists(desktop_path):
+                os.remove(desktop_path)
+                logging.getLogger(__name__).info(f"Linux 自启动已禁用: {desktop_path}")
+        except Exception as exc:
+            logging.getLogger(__name__).warning(f"Linux 自启动删除失败: {exc}")
+
+
+def _set_autostart_macos(enabled):
+    """macOS LaunchAgents (.plist 文件)。"""
+    launch_dir = os.path.expanduser("~/Library/LaunchAgents")
+    os.makedirs(launch_dir, exist_ok=True)
+    plist_path = os.path.join(launch_dir, f"{APP_ID}.plist")
+
+    if enabled:
+        try:
+            import plistlib
+            # 确保日志目录存在
+            os.makedirs(LOG_DIR, exist_ok=True)
+
+            plist_data = {
+                "Label": APP_ID,
+                "ProgramArguments": _get_autostart_command().split(),
+                "RunAtLoad": True,
+                "KeepAlive": False,
+                "ProcessType": "Background",
+                "StandardOutPath": os.path.join(LOG_DIR, "autostart.log"),
+                "StandardErrorPath": os.path.join(LOG_DIR, "autostart_error.log"),
+            }
+            with open(plist_path, "wb") as f:
+                plistlib.dump(plist_data, f)
+
+            # 加载 LaunchAgent
+            try:
+                import subprocess
+                subprocess.run(["launchctl", "load", plist_path], check=False)
+            except Exception:
+                pass
+
+            logging.getLogger(__name__).info(f"macOS 自启动已启用: {plist_path}")
+        except Exception as exc:
+            logging.getLogger(__name__).warning(f"macOS 自启动创建失败: {exc}")
+    else:
+        try:
+            if os.path.exists(plist_path):
+                # 先卸载
+                try:
+                    import subprocess
+                    subprocess.run(["launchctl", "unload", plist_path], check=False)
+                except Exception:
+                    pass
+                os.remove(plist_path)
+                logging.getLogger(__name__).info(f"macOS 自启动已禁用: {plist_path}")
+        except Exception as exc:
+            logging.getLogger(__name__).warning(f"macOS 自启动删除失败: {exc}")
 
 
 def paint_round_rect(painter, rect, radius, color, width=1):
@@ -474,6 +635,8 @@ class _HotkeyFilter(QAbstractNativeEventFilter):
         self._hotkey_id = hotkey_id
 
     def nativeEventFilter(self, event_type, message):
+        if not IS_WINDOWS:
+            return False, 0
         try:
             types = (b"windows_generic_MSG", "windows_generic_MSG")
             if event_type not in types:
@@ -496,6 +659,8 @@ class GlobalHotkey(QObject):
         super().__init__(parent)
         self._filter = None
         self._ok = False
+        if not IS_WINDOWS:
+            return
         try:
             # hWnd 传 None：WM_HOTKEY 直接投递到本线程消息队列
             self._ok = bool(

@@ -9,9 +9,11 @@
 #   · 统一 14px 字号；时钟 HH:MM（去秒）、日期 MM-DD 周X
 #   · 防重叠：时钟+日期永不压缩；宽度不足时优先隐藏"天气"，再隐藏"课程"
 #   · 屏幕热插拔 / 分辨率 / DPI 变更自动重新适配（多显示器独立适配）
+#   · Linux 兼容：修复灵动岛无法定位到顶部的问题
 # ==========================================================================
 
 import logging
+import sys
 from datetime import datetime
 
 from PySide6.QtCore import (
@@ -41,6 +43,11 @@ WEEKDAY_CN2 = ["周一", "周二", "周三", "周四", "周五", "周六", "周�
 
 # 统一字号：14px ≈ 10.5pt（Qt 磅值自动按 DPI 缩放）
 FONT_MAIN = 10.5
+
+# 检测运行平台
+IS_WINDOWS = sys.platform == "win32"
+IS_LINUX = sys.platform.startswith("linux")
+IS_MAC = sys.platform == "darwin"
 
 
 def theme_colors():
@@ -173,7 +180,7 @@ class _ScrollLabel(QWidget):
         self._anim = QPropertyAnimation(self, b"_so", self)
         self._anim.setEasingCurve(QEasingCurve.Type.Linear)
         self._anim.finished.connect(self._on_scroll_done)
-        self._anim_ref = self._anim   # 持有引用，防止动画对象被回收
+        self._anim_ref = self._anim
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -200,7 +207,6 @@ class _ScrollLabel(QWidget):
         self._natural_w = int(fm.horizontalAdvance(self._text)) + s(4)
 
     def restart_scroll(self):
-        """根据当前实际宽度决定是否需要滚动；文字放得下则静止显示。"""
         if not self._text or self.width() <= 0:
             return
         self._anim.stop()
@@ -216,7 +222,6 @@ class _ScrollLabel(QWidget):
         self._anim.start()
 
     def _on_scroll_done(self):
-        # 滚动到底后停留 1.5 秒，再从头开始
         QTimer.singleShot(1500, self.restart_scroll)
 
     def changeEvent(self, event):
@@ -296,9 +301,6 @@ class RightCarousel(QWidget):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.hide()
 
-    # ------------------------------------------------------------------
-    #  天气 / 预警数据
-    # ------------------------------------------------------------------
     def set_weather(self, data):
         self.weather_display.set_weather(data)
         self.show()
@@ -308,7 +310,6 @@ class RightCarousel(QWidget):
         self.show()
 
     def set_warnings(self, warnings):
-        """设置预警列表并启动分段轮播（首段固定天气+AQI，其后每条预警为一段）。"""
         self._warnings = list(warnings or [])
         self._index = 0
         self._timer.stop()
@@ -322,9 +323,6 @@ class RightCarousel(QWidget):
     def segment_count(self):
         return 1 + len(self._warnings)
 
-    # ------------------------------------------------------------------
-    #  轮播
-    # ------------------------------------------------------------------
     def _advance(self):
         if self.segment_count() <= 1:
             return
@@ -335,13 +333,11 @@ class RightCarousel(QWidget):
         self._fade.start()
 
     def set_mode(self, mode):
-        """切换预警文字显示方式：滚动=跑马灯；遮挡=原省略号算法。"""
         self._scroll_mode = (mode == "scroll")
         if self._index > 0:
             self._apply_segment()
 
     def _warning_text(self):
-        """当前预警的展示文字：地点发布什么预警（如 临海市发布地质灾害气象风险黄色预警）。"""
         w = self._warnings[self._index - 1] if self._warnings else {}
         title = w.get("title") or "".join(
             [w.get("typeName", ""), w.get("level", "")]) or "天气预警"
@@ -349,9 +345,6 @@ class RightCarousel(QWidget):
         return "%s发布%s" % (who, title) if who else title
 
     def _apply_segment(self):
-        """切换到当前索引对应的段（0=天气+AQI，>=1=第 n 条预警，右对齐）。
-        遮挡模式：预警过长时保留"发布了什么预警"的后半段，前面用省略号替代（ElideLeft）；
-        滚动模式：预警超宽时横向滚动显示全文。"""
         if self._index == 0:
             self.warning_label.hide()
             self.warning_scroll.hide()
@@ -372,13 +365,11 @@ class RightCarousel(QWidget):
             self.warning_scroll.hide()
             self.warning_label.setStyleSheet("color: %s; background: transparent;" % color)
             fm = QFontMetricsF(self.warning_label.font())
-            # 右端省略：只保留"发布了什么预警"部分，前面用省略号替代
             self.warning_label.setText(fm.elidedText(text, Qt.ElideLeft, avail))
             self.warning_label.show()
         self.updateGeometry()
 
     def cap_width(self, avail):
-        """限制最宽可用宽度（避免碰到时间模块），预警过长时右端省略号。"""
         if avail <= 0:
             return
         self._max_width = avail
@@ -465,13 +456,11 @@ class HitokotoLabel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._label)
-        # 滚动动画
         self._offset = 0.0
         self._scroll_anim = QPropertyAnimation(self, b"_so", self)
         self._scroll_anim.setEasingCurve(QEasingCurve.Type.Linear)
         self._scroll_anim.finished.connect(self._on_scroll_done)
-        self._anim_ref = self._scroll_anim   # 持有引用，防止动画对象被回收
-        # 滚动去抖动：同一文字滚动中不打断；到底后停留 1.5s 再从头开始
+        self._anim_ref = self._scroll_anim
         self._in_pause = False
         self._last_scroll_avail = None
         self._pause_timer = QTimer(self)
@@ -505,8 +494,6 @@ class HitokotoLabel(QWidget):
             self.update()
 
     def set_quote(self, data):
-        """设置一言内容：遮挡模式只显示句子（≤21字，无出处）；
-        滚动模式不限字数，显示「句子」——《出处》。"""
         sentence = (data.get("hitokoto") or "").strip()
         if not sentence:
             self.hide()
@@ -525,7 +512,6 @@ class HitokotoLabel(QWidget):
         self.restart_scroll()
 
     def _rebuild_text(self):
-        """按当前显示方式构建全文：遮挡=仅句子；滚动=句子+出处。"""
         if self._mode == "scroll" and self._source:
             self._full_text = "「%s」——《%s》" % (self._sentence, self._source)
         else:
@@ -546,8 +532,6 @@ class HitokotoLabel(QWidget):
         self._label.setText(fm.elidedText(self._full_text, Qt.ElideRight, avail))
 
     def restart_scroll(self):
-        """根据当前实际宽度决定是否需要滚动；文字放得下则不滚。
-        滚动中保持不打断（宽度变化小于容差时不重启），避免每帧/每秒的布局重算导致"鬼畜"。"""
         avail = self.width()
         if not self._full_text or avail <= 0:
             return
@@ -561,11 +545,11 @@ class HitokotoLabel(QWidget):
             self.update()
             return
         if self._in_pause:
-            return   # 停留间隔内不重启
+            return
         if (self._scroll_anim.state() == QAbstractAnimation.State.Running
                 and self._last_scroll_avail is not None
                 and abs(avail - self._last_scroll_avail) <= s(4)):
-            return   # 正在滚动且宽度基本未变，保持不打断
+            return
         self._label.setVisible(False)
         distance = self._natural_w - avail + s(10)
         duration = int(max(4000, distance * 3))
@@ -578,12 +562,10 @@ class HitokotoLabel(QWidget):
         self.update()
 
     def _resume_scroll(self):
-        """滚动到底停留间隔结束，从头开始下一次滚动。"""
         self._in_pause = False
         self.restart_scroll()
 
     def _on_scroll_done(self):
-        # 滚动到底后停留 1.5 秒，再从头开始
         self._in_pause = True
         self._pause_timer.start()
 
@@ -643,12 +625,11 @@ class WeatherDisplay(QWidget):
         self._air = None
         self._compact = False
         self._err_text = "网络异常"
-        # 报错信息强制滚动：无论遮挡/滚动模式，超宽时一律跑马灯显示全文
         self._err_offset = 0.0
         self._err_anim = QPropertyAnimation(self, b"_eo", self)
         self._err_anim.setEasingCurve(QEasingCurve.Type.Linear)
         self._err_anim.finished.connect(self._on_err_scroll_done)
-        self._err_anim_ref = self._err_anim   # 持有引用，防止动画对象被回收
+        self._err_anim_ref = self._err_anim
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setMinimumWidth(s(70))
 
@@ -667,7 +648,6 @@ class WeatherDisplay(QWidget):
         self.update()
 
     def restart_err_scroll(self):
-        """报错信息超宽时强制横向滚动显示全文（不依赖文字显示方式设置）。"""
         if not self._error or not self._err_text:
             return
         self._err_anim.stop()
@@ -686,7 +666,6 @@ class WeatherDisplay(QWidget):
         self._err_anim.start()
 
     def _on_err_scroll_done(self):
-        # 滚动到底后停留 1.5 秒，再从头开始
         QTimer.singleShot(1500, self.restart_err_scroll)
 
     def resizeEvent(self, event):
@@ -705,10 +684,10 @@ class WeatherDisplay(QWidget):
 
     def _measure(self, with_aqi):
         fm = QFontMetricsF(make_font(FONT_MAIN))
-        w = s(2) + s(18)   # 图标
+        w = s(2) + s(18)
         if self._text:
-            w += s(6) + fm.horizontalAdvance(self._text)   # 当前天气文字
-        w += s(6) + fm.horizontalAdvance(self._temp)       # 温度
+            w += s(6) + fm.horizontalAdvance(self._text)
+        w += s(6) + fm.horizontalAdvance(self._temp)
         if with_aqi:
             aqi = self._aqi_text()
             if aqi:
@@ -716,15 +695,12 @@ class WeatherDisplay(QWidget):
         return int(w) + s(2)
 
     def full_width(self):
-        """带 AQI 的完整宽度。"""
         return self._measure(True)
 
     def compact_width(self):
-        """去掉 AQI 后的紧凑宽度。"""
         return self._measure(False)
 
     def set_compact(self, compact):
-        """压缩模式：空间不足时隐藏 AQI 徽标。"""
         compact = bool(compact)
         if compact != self._compact:
             self._compact = compact
@@ -752,7 +728,6 @@ class WeatherDisplay(QWidget):
         self.update()
 
     def set_error(self, message):
-        """天气获取失败：直接显示真实错误信息（不再回退到缓存数据）。"""
         colors = theme_colors()
         self._error = True
         self._cached = False
@@ -771,7 +746,6 @@ class WeatherDisplay(QWidget):
         painter.setRenderHint(QPainter.TextAntialiasing)
         colors = theme_colors()
 
-        # 摇摆：绕中心旋转
         painter.save()
         painter.translate(self.width() / 2, self.height() / 2)
         painter.rotate(self._angle)
@@ -788,7 +762,6 @@ class WeatherDisplay(QWidget):
         fm = QFontMetricsF(font)
         text_x = x + icon_size + s(6)
 
-        # 当前天气文字（如 小雨）显示在温度左侧
         if self._text and not self._error:
             painter.setPen(QColor(colors["text_secondary"]))
             painter.drawText(
@@ -803,7 +776,6 @@ class WeatherDisplay(QWidget):
         if self._error:
             painter.setPen(QColor(colors["danger"]))
             text = self._err_text
-            # 报错信息强制滚动：超宽时横向滚动显示全文（不依赖遮挡/滚动设置）
             x0 = text_x + self._err_offset
             rect = QRectF(x0, (self.height() - fm.height()) / 2,
                           self.width() - x0, fm.height())
@@ -812,7 +784,6 @@ class WeatherDisplay(QWidget):
             text = self._temp
         painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)
 
-        # 空气质量 AQI 徽标（温度右侧；紧凑模式不显示）
         aqi = self._aqi_text() if not self._compact else ""
         if aqi:
             aqi_w = fm.horizontalAdvance(aqi)
@@ -828,17 +799,17 @@ class WeatherDisplay(QWidget):
 
 
 # ==========================================================================
-#  顶部导航栏主窗口
+#  顶部导航栏主窗口（Linux 兼容修复版）
 # ==========================================================================
 
 class IslandWindow(QWidget):
     """固定顶部、全屏宽的导航栏信息条。"""
 
-    NAV_HEIGHT = 40            # 高度固定 40px（× DPI 缩放）
-    HIDE_WEATHER_WIDTH = 560   # 宽度小于该值（逻辑像素）时隐藏天气
-    HIDE_COURSE_WIDTH = 320    # 极端窄屏再隐藏课程
-    HOVER_HIDE_MARGIN = 60     # 鼠标靠近灵动岛多少像素内自动隐藏
-    HOVER_HIDE_INTERVAL = 100  # 靠近检测轮询间隔（毫秒，越小反应越快）
+    NAV_HEIGHT = 40
+    HIDE_WEATHER_WIDTH = 560
+    HIDE_COURSE_WIDTH = 320
+    HOVER_HIDE_MARGIN = 60
+    HOVER_HIDE_INTERVAL = 100
 
     def __init__(self, theme_manager, course_manager, weather_manager, config, parent=None):
         super().__init__(parent)
@@ -860,38 +831,42 @@ class IslandWindow(QWidget):
         self._warnings = []
         self._weather_data = None
 
-        # 课程显示动态状态
         self._cstatus = None
         self._carousel_items = []
         self._carousel_index = 0
         self._course_elide_avail = 0
 
-        # 鼠标靠近自动隐藏（默认开启）
         self._hover_hide = bool(config.get("hover_hide", True))
         self._hover_auto_hidden = False
         self._sliding = False
         self._hover_margin = int(config.get("hover_hide_margin", 60))
         self._hover_interval = int(config.get("hover_hide_interval", 100))
 
-        # 课程进度条粗细
         self._progress_height = int(config.get("course_progress_height", 3))
-        # 每日一言分类（空 = 随机全部）与刷新间隔（分钟）
         self._hitokoto_category = config.get("hitokoto_category", "") or ""
         self._hitokoto_refresh_ms = max(
             60, int(config.get("hitokoto_refresh_minutes", 15))) * 60 * 1000
-        # 文字显示方式：elide=遮挡（原算法）/ scroll=滚动（跑马灯），
-        # 同时应用于每日一言与天气预警文字
         self._text_mode = config.get("text_mode", "scroll") or "scroll"
         if self._text_mode not in ("elide", "scroll"):
             self._text_mode = "scroll"
 
-        # ---- 窗口配置：置顶 / 无边框 / 工具窗 / 不抢焦点 / 透明背景 ----
-        self.setWindowFlags(
-            Qt.WindowStaysOnTopHint |
-            Qt.FramelessWindowHint |
-            Qt.Tool |
-            Qt.WindowDoesNotAcceptFocus
-        )
+        # ---- 窗口配置：置顶 / 无边框 / 不抢焦点 / 透明背景 ----
+        # Linux 兼容：使用 Qt.Window 替代 Qt.Tool
+        if IS_LINUX:
+            self.setWindowFlags(
+                Qt.WindowStaysOnTopHint |
+                Qt.FramelessWindowHint |
+                Qt.Window |
+                Qt.WindowDoesNotAcceptFocus
+            )
+        else:
+            self.setWindowFlags(
+                Qt.WindowStaysOnTopHint |
+                Qt.FramelessWindowHint |
+                Qt.Tool |
+                Qt.WindowDoesNotAcceptFocus
+            )
+
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
 
@@ -911,7 +886,6 @@ class IslandWindow(QWidget):
     #  UI 构建
     # ==================================================================
     def _build_ui(self):
-        # 外层容器：紧贴顶部，无阴影边距
         self.outer_frame = QFrame(self)
         outer_layout = QGridLayout(self.outer_frame)
         outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -919,7 +893,6 @@ class IslandWindow(QWidget):
         outer_layout.setColumnStretch(0, 1)
         outer_layout.setRowStretch(0, 1)
 
-        # 背景（毛玻璃）：半透明底色 + 模糊
         self.bg_frame = QFrame(self.outer_frame)
         self.bg_frame.setObjectName("islandBackground")
         self.bg_frame.setAttribute(Qt.WA_StyledBackground, True)
@@ -929,50 +902,38 @@ class IslandWindow(QWidget):
         self._blur_effect = make_blur(self.bg_frame, radius=8)
         outer_layout.addWidget(self.bg_frame, 0, 0)
 
-        # 内容层（透明，浮于背景之上）
-        # 时间采用绝对定位精确居中，不随左右模块宽度变化而移动
         self.content_widget = QWidget(self.outer_frame)
         self.content_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         content = QHBoxLayout(self.content_widget)
-        content.setContentsMargins(s(4), 0, s(20), 0)   # 左侧贴齐灵动岛
+        content.setContentsMargins(s(4), 0, s(20), 0)
         content.setSpacing(s(8))
         content.setAlignment(Qt.AlignVCenter)
         outer_layout.addWidget(self.content_widget, 0, 0)
 
-        # 左：课程信息（固定，可收缩，超出时省略号）
         self._build_course_section(content)
 
-        # 每日一言：绝对定位，居中于课程模块与时间之间（不占布局）
         self.hitokoto_label = HitokotoLabel(self.content_widget)
         self.hitokoto_label.hide()
 
         content.addStretch(1)
 
-        # 右：天气+AQI 与 预警 分段轮播（最右侧）
         self.right_carousel = RightCarousel(self.content_widget)
         self.weather_display = self.right_carousel.weather_display
         content.addWidget(self.right_carousel)
 
-        # 应用文字显示方式（遮挡/滚动）到每日一言与天气预警
         self.hitokoto_label.set_mode(self._text_mode)
         self.right_carousel.set_mode(self._text_mode)
 
-        # 中：时钟 + 日期（绝对居中，永不移动、永不压缩）
         self._build_center_section(self.content_widget)
 
-        # 预警：右上角浮层
         self._build_warning_overlay()
 
-        # 课程进度条：灵动岛底部细线
         self.course_progress = CourseProgress(self.outer_frame)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.outer_frame)
 
-    # ------------------------------------------------------------------
-    #  左：课程信息
-    # ------------------------------------------------------------------
     def _build_course_section(self, content):
         panel = CoursePanel(self.content_widget)
         row = QHBoxLayout(panel)
@@ -980,14 +941,12 @@ class IslandWindow(QWidget):
         row.setSpacing(s(8))
         row.setAlignment(Qt.AlignVCenter)
 
-        # tiny 状态圆点
         self.course_dot = QFrame(panel)
         self.course_dot.setFixedSize(s(6), s(6))
         self.course_dot.setAttribute(Qt.WA_StyledBackground, True)
         self.course_dot.setStyleSheet("background: #22C55E; border-radius: %dpx;" % s(3))
         row.addWidget(self.course_dot)
 
-        # 课程文字（不粗，margin-right 20px）
         self.course_label = QLabel("今日无课程安排", panel)
         self.course_label.setFont(make_font(FONT_MAIN, bold=False))
         self.course_label.setMinimumWidth(0)
@@ -997,19 +956,14 @@ class IslandWindow(QWidget):
         content.addWidget(panel)
         self.course_panel = panel
 
-        # 课程切换淡入（InOutCubic 0.5s）
         self._course_effect = QGraphicsOpacityEffect(panel)
         panel.setGraphicsEffect(self._course_effect)
         self._course_effect.setOpacity(1.0)
 
-        # 课程面板尺寸变化（文字换屏/窗口缩放）时实时重居中一言
         if not hasattr(self, "_course_resize_filter"):
             self._course_resize_filter = _CourseResizeFilter(self)
         panel.installEventFilter(self._course_resize_filter)
 
-    # ------------------------------------------------------------------
-    #  中：时钟 + 日期
-    # ------------------------------------------------------------------
     def _build_center_section(self, parent):
         box = QWidget(parent)
         box.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -1019,7 +973,6 @@ class IslandWindow(QWidget):
         row.setAlignment(Qt.AlignCenter)
 
         self.time_label = DigitalTimeLabel(size_pt=11.0, parent=box)
-        # 时钟固定宽度：按最宽文本 "00:00:00"（秒级）计算，预留弹性缩放余量
         fm_clock = QFontMetricsF(make_font(11.0, bold=True))
         self.time_label.setFixedWidth(int(fm_clock.horizontalAdvance("00:00:00")) + s(18))
 
@@ -1027,18 +980,15 @@ class IslandWindow(QWidget):
         self.date_label.setFont(make_font(FONT_MAIN))
         self.date_label.setStyleSheet("color: %s;" % theme_colors()["text_secondary"])
         self.date_label.setAlignment(Qt.AlignCenter)
-        # 日期最小宽度：按最宽形态 "08-11 周三" 计算，保证永远完整
         fm_date = QFontMetricsF(make_font(FONT_MAIN))
         self.date_label.setMinimumWidth(int(fm_date.horizontalAdvance("08-11 周三")))
 
         row.addWidget(self.time_label)
         row.addWidget(self.date_label)
         self.center_group = box
-        # 时钟+日期按内容宽度固定尺寸，任何情况下禁止压缩
         self.center_group.setFixedSize(self.center_group.sizeHint())
 
     def _recenter_time(self):
-        """把时间组绝对定位到内容区正中央（水平 + 垂直）。"""
         if not hasattr(self, "center_group"):
             return
         w = self.content_widget.width()
@@ -1047,25 +997,16 @@ class IslandWindow(QWidget):
             (w - self.center_group.width()) // 2,
             (h - self.center_group.height()) // 2)
 
-    # ------------------------------------------------------------------
-    #  右侧分段轮播（天气+AQI / 预警）
-    # ------------------------------------------------------------------
     def _update_right_fit(self):
-        """按与中心时钟的实际间距限制右侧轮播最宽宽度，避免遮挡时间。
-        右侧模块（天气/预警）与时间模块之间始终保留 gap 间隙。"""
         if not hasattr(self, "right_carousel"):
             return
         gap = s(10)
-        # 右侧内容区本身有 s(20) 右边距，再预留 gap 与时钟隔开
         right_avail = self.content_widget.width() - (
             self.center_group.x() + self.center_group.width()) - s(20) - gap
         if right_avail <= 0:
             return
         self.right_carousel.cap_width(right_avail)
 
-    # ------------------------------------------------------------------
-    #  预警浮层（右上角）
-    # ------------------------------------------------------------------
     def _build_warning_overlay(self):
         self.warning_panel = QFrame(self.content_widget)
         self.warning_panel.setStyleSheet(
@@ -1088,26 +1029,22 @@ class IslandWindow(QWidget):
     #  动画
     # ==================================================================
     def _build_animations(self):
-        # 课程呼吸灯（InOutSine 2s 循环）
         self._breath_anim = utils.create_loop_animation(
             self.course_panel, b"glow",
             [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)],
             duration=2000, easing=QEasingCurve.Type.InOutSine)
 
-        # 课程切换淡入（InOutCubic 0.5s）
         self._course_fade = QPropertyAnimation(self._course_effect, b"opacity", self._course_effect)
         self._course_fade.setDuration(500)
         self._course_fade.setEasingCurve(QEasingCurve.Type.InOutCubic)
         self._course_fade.setStartValue(0.55)
         self._course_fade.setEndValue(1.0)
 
-        # 预警脉冲（InOutQuint 1.5s 循环）
         self._warn_anim = utils.create_loop_animation(
             self._warn_effect, b"opacity",
             [(0.0, 0.7), (0.5, 1.0), (1.0, 0.7)],
             duration=1500, easing=QEasingCurve.Type.InOutQuint)
 
-        # 天气异常摇摆（InOutCubic 2s 循环，±3°）
         self._shake_anim = utils.create_loop_animation(
             self.weather_display, b"angle",
             [(0.0, -3.0), (0.5, 3.0), (1.0, -3.0)],
@@ -1136,17 +1073,14 @@ class IslandWindow(QWidget):
         self._course_timer.timeout.connect(self.update_course)
         self._course_timer.start()
 
-        # 鼠标靠近自动隐藏轮询（间隔可调）
         self._hover_timer = QTimer(self)
         self._hover_timer.setInterval(self._hover_interval)
         self._hover_timer.timeout.connect(self._check_hover_hide)
         self._hover_timer.start()
 
-        # 课间课程预告轮播
         self._carousel_timer = QTimer(self)
         self._carousel_timer.timeout.connect(self._on_carousel_tick)
 
-        # 每日一言：启动即预缓存一批 + 按设定间隔轮换/补充
         self._hitokoto_queue = []
         self._hitokoto_shown = False
         self._hitokoto_timer = QTimer(self)
@@ -1159,11 +1093,9 @@ class IslandWindow(QWidget):
     #  每日一言（Hitokoto）
     # ==================================================================
     def _fetch_hitokoto(self):
-        """后台批量获取经过字数筛选的一言（一次缓存多条）。"""
         if hasattr(self, "_hitokoto_worker") and self._hitokoto_worker.isRunning():
             return
         from hitokoto import HitokotoFetcher
-        # 遮挡模式：取 ≤21 字且不带出处的短句；滚动模式：不限字数并保留出处
         max_len = 21 if self._text_mode == "elide" else 0
         self._hitokoto_worker = HitokotoFetcher(
             self._hitokoto_category, count=3, max_len=max_len, parent=self)
@@ -1172,18 +1104,15 @@ class IslandWindow(QWidget):
         self._hitokoto_worker.start()
 
     def _on_hitokoto_batch(self, quotes):
-        """收到一批合格句子：入缓存；当前未显示则立即显示一条。"""
         self._hitokoto_queue.extend(quotes)
         logger.info("一言缓存 +%d 条（当前缓存 %d 条）", len(quotes), len(self._hitokoto_queue))
         if not self._hitokoto_shown:
             self._show_next_hitokoto()
 
     def _on_hitokoto_tick(self):
-        """刷新间隔到：切换到下一条缓存；缓存耗尽则重新获取。"""
         self._show_next_hitokoto()
 
     def _show_next_hitokoto(self):
-        """显示缓存队列中的下一条（字数已筛选，保证放得下）。"""
         if self._hitokoto_queue:
             quote = self._hitokoto_queue.pop(0)
             self._hitokoto_shown = True
@@ -1197,7 +1126,6 @@ class IslandWindow(QWidget):
             self._fetch_hitokoto()
 
     def _on_hitokoto_fail(self, _msg):
-        # 获取失败：隐藏，稍后由定时器重试
         self._hitokoto_shown = False
         self.hitokoto_label.hide()
         self._apply_adaptive_visibility()
@@ -1208,19 +1136,15 @@ class IslandWindow(QWidget):
         self._fetch_hitokoto()
 
     def set_hitokoto_refresh(self, minutes):
-        """设置一言刷新间隔（分钟），实时生效。"""
         self._hitokoto_refresh_ms = max(1, int(minutes)) * 60 * 1000
         self._hitokoto_timer.setInterval(self._hitokoto_refresh_ms)
 
     def set_text_mode(self, mode):
-        """设置文字显示方式（遮挡/滚动），同时应用于每日一言与天气预警，实时生效。
-        遮挡=省略截断（一言≤21字、无出处；预警右对齐省略）；滚动=超宽时滚动显示全文。"""
         self._text_mode = "scroll" if mode == "scroll" else "elide"
         if hasattr(self, "hitokoto_label"):
             self.hitokoto_label.set_mode(self._text_mode)
         if hasattr(self, "right_carousel"):
             self.right_carousel.set_mode(self._text_mode)
-        # 一言缓存与显示方式匹配：清空并按新模式重新获取
         self._hitokoto_queue = []
         self._fetch_hitokoto()
         self._apply_adaptive_visibility()
@@ -1229,13 +1153,11 @@ class IslandWindow(QWidget):
     #  鼠标靠近自动隐藏
     # ==================================================================
     def _hover_zone(self):
-        """鼠标靠近判定区域：灵动岛所在屏幕顶部的矩形（向下扩展边距）。"""
         rect = self.calculate_island_geometry()
         rect.setBottom(rect.bottom() + s(self._hover_margin))
         return rect
 
     def _check_hover_hide(self):
-        """鼠标靠近灵动岛时自动隐藏，鼠标移开区域后自动恢复显示。"""
         if not self._hover_hide or self._sliding:
             return
         zone = self._hover_zone()
@@ -1249,20 +1171,16 @@ class IslandWindow(QWidget):
             self.slide_in()
 
     def set_hover_hide(self, enabled):
-        """开启/关闭"鼠标靠近自动隐藏"。"""
         self._hover_hide = bool(enabled)
         if not self._hover_hide and self._hover_auto_hidden:
-            # 关闭该功能时，若当前因靠近而被隐藏，则恢复显示
             self._hover_auto_hidden = False
             if not self.isVisible():
                 self.slide_in()
 
     def set_hover_margin(self, margin):
-        """设置靠近隐藏的感应范围（像素）。"""
         self._hover_margin = max(10, min(400, int(margin)))
 
     def set_hover_interval(self, ms):
-        """设置靠近检测的轮询间隔（毫秒，越小反应越快）。"""
         self._hover_interval = max(30, min(2000, int(ms)))
         if hasattr(self, "_hover_timer"):
             self._hover_timer.setInterval(self._hover_interval)
@@ -1277,11 +1195,9 @@ class IslandWindow(QWidget):
         return self._hover_hide
 
     # ==================================================================
-    #  材质（亚克力 / 毛玻璃，可自定义底色）
+    #  材质（毛玻璃 / 亚克力）
     # ==================================================================
     def _glass_bg(self):
-        """返回当前背景色：auto=跟随主题，dark/light=固定深浅，custom=自定义色。
-        亚克力材质更透（低 alpha），毛玻璃材质更实（高 alpha）。"""
         style = self._glass_style
         alpha = 0.5 if self._material == "acrylic" else 0.72
         if style == "dark":
@@ -1297,7 +1213,6 @@ class IslandWindow(QWidget):
         return "rgba(30, 30, 40, %s)" % alpha
 
     def _corner_radius(self):
-        """返回背景圆角半径：胶囊 = 高度一半；矩形 = 0。"""
         if self._shape == "capsule":
             return max(0, self.height() // 2)
         return 0
@@ -1309,9 +1224,17 @@ class IslandWindow(QWidget):
                 % (self._glass_bg(), self._corner_radius()))
 
     def _apply_material(self):
-        """应用当前材质：亚克力=系统级 DWM 模糊；毛玻璃=控件级 QGraphicsBlur。"""
+        """应用当前材质：Linux 下不支持毛玻璃/亚克力，使用半透明背景。"""
         if not hasattr(self, "bg_frame"):
             return
+
+        # Linux 下禁用模糊效果，使用纯色半透明背景
+        if IS_LINUX:
+            if self._blur_effect is not None:
+                self._blur_effect.setEnabled(False)
+            self._apply_glass_bg()
+            return
+
         if self._material == "acrylic":
             if self._blur_effect is not None:
                 self._blur_effect.setEnabled(False)
@@ -1323,7 +1246,6 @@ class IslandWindow(QWidget):
         self._apply_glass_bg()
 
     def set_glass_style(self, style, custom_hex=""):
-        """设置毛玻璃底色样式：auto / dark / light / custom。"""
         self._glass_style = style
         if custom_hex:
             self._glass_custom = custom_hex
@@ -1336,7 +1258,6 @@ class IslandWindow(QWidget):
         return self._material
 
     def set_material(self, material):
-        """设置灵动岛材质：acrylic（亚克力）/ frosted（毛玻璃）。"""
         material = "acrylic" if material == "acrylic" else "frosted"
         if material != self._material:
             self._material = material
@@ -1347,7 +1268,6 @@ class IslandWindow(QWidget):
         return self._shape
 
     def set_shape(self, shape):
-        """设置灵动岛外形：rect（矩形）/ capsule（胶囊圆角）。"""
         shape = "capsule" if shape == "capsule" else "rect"
         if shape != self._shape:
             self._shape = shape
@@ -1355,45 +1275,64 @@ class IslandWindow(QWidget):
             logger.info("灵动岛形状切换: %s", shape)
 
     # ==================================================================
-    #  屏幕适配（多显示器 / 热插拔）
+    #  屏幕适配（多显示器 / 热插拔）- Linux 兼容修复
     # ==================================================================
     def current_screen(self):
-        return utils.get_screen(self._screen_index)
+        screens = QGuiApplication.screens()
+        if not screens:
+            return None
+        if 0 <= self._screen_index < len(screens):
+            return screens[self._screen_index]
+        return QGuiApplication.primaryScreen()
 
     def calculate_island_geometry(self):
-        """灵动岛几何：全屏模式占满整行，窗口模式按宽度比例水平居中。"""
+        """
+        计算灵动岛几何位置。
+        Linux 修复：使用 geometry() 获取完整屏幕区域，正确处理顶部坐标。
+        """
         screen = self.current_screen()
         if screen is None:
             return QRect(0, 0, s(1000), s(self.NAV_HEIGHT))
-        available = screen.availableGeometry()
+
+        # 使用 geometry() 获取完整屏幕区域
+        screen_geom = screen.geometry()
         dpi = screen.logicalDotsPerInch()
         scale = dpi / 96.0
         height = int(self.NAV_HEIGHT * scale)
+
         if self._fullscreen:
-            width = available.width()
-            x = available.x()
+            width = screen_geom.width()
+            x = screen_geom.x()
         else:
             ratio = max(0.5, min(1.0, self._width_ratio))
-            width = int(available.width() * ratio)
-            x = available.x() + (available.width() - width) // 2
-        return QRect(x, available.y(), width, height)
+            width = int(screen_geom.width() * ratio)
+            x = screen_geom.x() + (screen_geom.width() - width) // 2
+
+        # Linux 修复：正确处理顶部坐标
+        y = screen_geom.y()
+        if IS_LINUX:
+            # 尝试使用 availableGeometry 的顶部位置（可能排除面板）
+            avail_geom = screen.availableGeometry()
+            if avail_geom.y() > screen_geom.y():
+                y = avail_geom.y()
+            # 确保 y 不为负数（Wayland 兼容）
+            if y < 0:
+                y = 0
+
+        logger.debug(f"Island geometry: x={x}, y={y}, width={width}, height={height}")
+        return QRect(x, y, width, height)
 
     def apply_geometry(self):
         self.setGeometry(self.calculate_island_geometry())
         self._apply_adaptive_visibility()
 
     def _apply_adaptive_visibility(self):
-        """防重叠：宽度不足时优先隐藏"右侧轮播"，再隐藏"课程"；时钟+日期永不隐藏。
-        右侧轮播按可用宽度自动压缩 AQI / 截断预警文字。"""
         if not hasattr(self, "content_widget"):
             return
         width = self.width()
-        # 注意：HIDE_* 阈值本身是逻辑像素，不能再用 s() 按 DPI 二次缩放，
-        # 否则高 DPI 下会被错误地整体隐藏
         self.right_carousel.setVisible(width >= self.HIDE_WEATHER_WIDTH)
         self.course_panel.setVisible(width >= self.HIDE_COURSE_WIDTH)
         self._layout_warning_overlay()
-        # 先完成布局，再把时间绝对定位到正中央
         self.content_widget.layout().activate()
         self._recenter_time()
         self._fit_left_modules()
@@ -1402,31 +1341,25 @@ class IslandWindow(QWidget):
         self._reposition_progress()
 
     def _fit_left_modules(self):
-        """左侧空间分配：课程 + 每日一言 共享时钟左侧，互相留空隙、绝不遮挡时间。
-        滚动模式：一言占课程与时钟之间全部剩余空间，超宽自动滚动显示全文；
-        遮挡模式：一言最多占 21 字宽，空间不足时隐藏一言，课程按剩余宽度省略。"""
         clock_left = self.center_group.x()
-        # 布局未就绪时不处理（避免异步取到一言时被误隐藏）
         if clock_left <= 0 or self.content_widget.width() <= 0:
             return
         fm = QFontMetricsF(make_font(FONT_MAIN))
         quote_max_w = int(fm.horizontalAdvance("一" * 21)) + s(4)
         gap = s(10)
-        course_overhead = s(6) + s(8) + s(2)   # 状态圆点 + 间距 + 面板边距
+        course_overhead = s(6) + s(8) + s(2)
         hitokoto_on = getattr(self, "hitokoto_label", None) is not None \
             and self.hitokoto_label.isVisible()
         if hitokoto_on and self.hitokoto_label._mode == "elide":
-            # 遮挡模式：给一言预留 21 字宽（不超过左侧 45%），课程用剩余
             reserved = min(quote_max_w, int((clock_left - gap) * 0.45))
             course_avail = clock_left - gap - gap - reserved - course_overhead
             if course_avail >= s(60) and reserved >= s(50):
                 self._course_elide_avail = course_avail
                 self._recenter_hitokoto()
                 return
-            self.hitokoto_label.hide()   # 空间不足，隐藏一言
+            self.hitokoto_label.hide()
             self._hitokoto_shown = False
         elif hitokoto_on:
-            # 滚动模式：给一言预留最小空间，其余全给课程；一言超宽时滚动显示全文
             min_quote = s(60)
             course_avail = clock_left - gap - gap - min_quote - course_overhead
             if course_avail < s(60):
@@ -1438,9 +1371,6 @@ class IslandWindow(QWidget):
         self._recenter_hitokoto()
 
     def _recenter_hitokoto(self):
-        """把一言绝对定位到课程模块与时间之间居中，两侧留间隙。
-        课程面板尺寸变化（换屏/缩放）时由 _CourseResizeFilter 实时重新触发本方法，
-        从而实现跟随课程实际长度的实时居中。"""
         if not getattr(self, "_hitokoto_shown", False):
             return
         h = getattr(self, "hitokoto_label", None)
@@ -1451,7 +1381,6 @@ class IslandWindow(QWidget):
         clock_left = self.center_group.x()
         avail = clock_left - gap - (course_right + gap)
         if avail < s(50):
-            # 空间暂不足：不隐藏，等待课程面板尺寸变化事件再次触发定位
             return
         self._position_hitokoto(course_right, avail)
 
@@ -1460,7 +1389,6 @@ class IslandWindow(QWidget):
         if avail < s(30):
             avail = s(30)
         if h._mode == "scroll" and h._natural_w > avail:
-            # 滚动模式：占满课程与时钟之间全部空间，超宽时在内部滚动
             w = avail
         else:
             w = min(h._natural_w, avail)
@@ -1475,7 +1403,6 @@ class IslandWindow(QWidget):
             h._update_elided()
 
     def _connect_screen_signals(self):
-        """监听屏幕增删 / 分辨率变更 / DPI 变更，自动重新适配。"""
         app = QGuiApplication.instance()
 
         def _re_adapt(*_args):
@@ -1494,18 +1421,14 @@ class IslandWindow(QWidget):
     # ==================================================================
     def update_time(self):
         now = datetime.now()
-        # 时钟 HH:MM:SS（秒级）
         self.time_label.set_text(now.strftime("%H:%M:%S"))
-        # 日期 MM-DD 周X
         self.date_label.setText("%02d-%02d %s" % (now.month, now.day, WEEKDAY_CN2[now.weekday()]))
-        # 课程倒计时/进度每秒刷新
         self._tick_course()
 
     # ==================================================================
-    #  课程动态显示（状态机 / 倒计时 / 进度条 / 课间轮播）
+    #  课程动态显示
     # ==================================================================
     def update_course(self):
-        """课程显示核心：根据状态机刷新左侧课程信息。"""
         status = self.course_manager.current_status()
         old_status = self._cstatus.get("status") if self._cstatus else None
         self._cstatus = status
@@ -1564,14 +1487,13 @@ class IslandWindow(QWidget):
             self._stop_carousel()
 
     def _tick_course(self):
-        """每秒刷新：倒计时与进度条（不重复触发淡入）。"""
         if not hasattr(self, "_cstatus") or self._cstatus is None:
             return
         new = self.course_manager.current_status()
         old = self._cstatus
         if (new.get("status") != old.get("status")
                 or new.get("empty") != old.get("empty")):
-            self.update_course()   # 状态切换瞬间立即刷新
+            self.update_course()
             return
         self._cstatus = new
         st = new.get("status")
@@ -1626,9 +1548,6 @@ class IslandWindow(QWidget):
         self._update_course_elide()
 
     def _update_course_elide(self):
-        """左侧文字按与中心时钟的实际间距省略号截断，确保不遮挡时间。
-        已为一言预留的空间（_course_elide_avail）优先使用；
-        课程宽度变化后先强制完成布局，再实时重新居中一言（跟随课程长度）。"""
         if not hasattr(self, "course_label"):
             return
         reserved = getattr(self, "_course_elide_avail", 0)
@@ -1638,8 +1557,6 @@ class IslandWindow(QWidget):
         fm = QFontMetricsF(self.course_label.font())
         elided = fm.elidedText(self._course_full_text, Qt.ElideRight, avail)
         self.course_label.setText(elided)
-        # 强制整条内容布局重新计算（invalidate+activate），
-        # 使课程面板宽度立刻更新为实际长度，再实时重居中一言
         self.course_label.updateGeometry()
         lay = self.content_widget.layout()
         lay.invalidate()
@@ -1661,7 +1578,6 @@ class IslandWindow(QWidget):
         self._carousel_index = 0
 
     def _restart_carousel_timer(self):
-        """第 1 屏（下节课+倒计时）停留 5 秒，其余 3 秒。"""
         if len(self._carousel_items) <= 1:
             self._carousel_timer.stop()
             return
@@ -1710,7 +1626,6 @@ class IslandWindow(QWidget):
                     data.get("text", "?"), len(self._warnings))
 
     def _on_weather_failed(self, info):
-        """天气获取失败：不再回退缓存，直接在灵动岛右侧显示真实错误信息。"""
         self._weather_data = None
         self._warnings = []
         message = info.get("message", "网络异常")
@@ -1732,7 +1647,6 @@ class IslandWindow(QWidget):
         self.warning_panel.setStyleSheet(
             "background-color: %s; border-radius: %dpx; border: none;"
             % (colors["warning_bg"], s(8)))
-        # 自定义字体 / 主题切换后重新应用字体
         self.course_label.setFont(make_font(FONT_MAIN, bold=False))
         self.date_label.setFont(make_font(FONT_MAIN))
         if hasattr(self, "right_carousel"):
@@ -1773,7 +1687,7 @@ class IslandWindow(QWidget):
             (self.content_widget.height() - self.warning_panel.height()) // 2)
 
     # ==================================================================
-    #  显示 / 隐藏（顶部滑入滑出）
+    #  显示 / 隐藏（顶部滑入滑出）- Linux 兼容修复
     # ==================================================================
     def slide_in(self):
         self.apply_geometry()
@@ -1783,7 +1697,12 @@ class IslandWindow(QWidget):
             self.raise_()
             return
         target = self.pos()
-        start = QPoint(target.x(), target.y() - self.height() - s(2))
+        # Linux 下减少偏移量，避免被窗口管理器强制拉回
+        if IS_LINUX:
+            start = QPoint(target.x(), target.y() - s(10))
+        else:
+            start = QPoint(target.x(), target.y() - self.height() - s(2))
+
         self.move(start)
         self.setWindowOpacity(self._opacity)
         self.show()
@@ -1803,7 +1722,12 @@ class IslandWindow(QWidget):
         if screen is None:
             self.hide()
             return
-        end = QPoint(self.x(), self.y() - self.height() - s(2))
+        # Linux 下减少偏移量
+        if IS_LINUX:
+            end = QPoint(self.x(), self.y() - s(10))
+        else:
+            end = QPoint(self.x(), self.y() - self.height() - s(2))
+
         self._sliding = True
         anim = QPropertyAnimation(self, b"pos", self)
         anim.setDuration(300)
@@ -1816,7 +1740,6 @@ class IslandWindow(QWidget):
         logger.info("灵动岛滑出隐藏")
 
     def _on_slide_done(self):
-        """滑入/滑出动画结束，清除滑动状态。"""
         self._sliding = False
 
     def toggle_visible(self):
@@ -1838,13 +1761,11 @@ class IslandWindow(QWidget):
             self.setWindowOpacity(self._opacity)
 
     def set_width_ratio(self, ratio):
-        """设置灵动岛宽度比例（窗口模式下生效），实时调整几何。"""
         self._width_ratio = float(ratio)
         if self.isVisible():
             self.apply_geometry()
 
     def set_progress_height(self, height):
-        """设置课程进度条粗细（像素），实时生效。"""
         self._progress_height = max(1, min(8, int(height)))
         if self.isVisible():
             self._reposition_progress()
@@ -1867,18 +1788,22 @@ class IslandWindow(QWidget):
         return self._fullscreen
 
     def set_pass_through(self, enabled):
-        """鼠标穿透：开启后整个灵动岛窗口对鼠标事件透明（Windows WS_EX_TRANSPARENT）。"""
+        """鼠标穿透：开启后整个灵动岛窗口对鼠标事件透明。"""
         self._pass_through = bool(enabled)
         for widget in self.findChildren(QWidget):
             widget.setAttribute(Qt.WA_TransparentForMouseEvents, self._pass_through)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, self._pass_through)
-        self._apply_click_through()
+        # Windows 下使用 WS_EX_TRANSPARENT
+        if IS_WINDOWS:
+            self._apply_click_through_windows()
 
     def is_pass_through(self):
         return self._pass_through
 
-    def _apply_click_through(self):
-        """Windows 窗口级鼠标穿透：设置 WS_EX_TRANSPARENT 扩展样式。"""
+    def _apply_click_through_windows(self):
+        """Windows 窗口级鼠标穿透。"""
+        if not IS_WINDOWS:
+            return
         try:
             import ctypes
             hwnd = int(self.winId())
@@ -1903,4 +1828,5 @@ class IslandWindow(QWidget):
         super().showEvent(event)
         self._apply_material()
         self.apply_geometry()
-        self._apply_click_through()
+        if IS_WINDOWS:
+            self._apply_click_through_windows()
