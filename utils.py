@@ -102,6 +102,22 @@ def custom_font_family():
     return CUSTOM_FONT_FAMILY or FONT_FAMILY
 
 
+# Linux 常见中文字体 fallback 链
+_LINUX_FONT_FALLBACK = (
+    '"Noto Sans CJK SC", "WenQuanYi Micro Hei", '
+    '"Droid Sans Fallback", "AR PL UMing CN"'
+)
+_WINDOWS_FONT_FALLBACK = '"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"'
+
+
+def font_family_css():
+    """返回适用于 QSS / stylesheet 的 font-family 字符串。
+    优先使用自定义字体，后面追加平台 fallback 链。"""
+    family = custom_font_family()
+    fallback = _LINUX_FONT_FALLBACK if IS_LINUX else _WINDOWS_FONT_FALLBACK
+    return '"%s", %s' % (family, fallback)
+
+
 def load_custom_font_file(font_path):
     """
     导入自定义字体文件（.ttf/.otf/.ttc）：

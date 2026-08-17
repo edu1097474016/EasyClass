@@ -15,7 +15,7 @@ import os
 from PySide6.QtCore import QObject, Signal, QPropertyAnimation, QEasingCurve, QTimer
 from PySide6.QtGui import QColor
 
-from utils import RES_DIR, load_config, save_config, make_font
+from utils import RES_DIR, load_config, save_config, make_font, font_family_css
 
 
 class ThemeManager(QObject):
@@ -138,6 +138,7 @@ class ThemeManager(QObject):
                 hover.red(), hover.green(), hover.blue()),
             "--primary-pressed": "rgba(%d, %d, %d, 0.70)" % (
                 pressed.red(), pressed.green(), pressed.blue()),
+            "--font-family": font_family_css(),
         }
 
     def _sync_colors(self):

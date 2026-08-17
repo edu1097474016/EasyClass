@@ -85,6 +85,7 @@ class WeatherWorker(QThread):
     fail = Signal(dict)
 
     API_URL = "https://uapis.cn/api/v1/misc/weather"
+    AQI_URL = "https://api.waqi.info/feed/%s/?token=demo"
     TIMEOUT = 8
 
     def __init__(self, city, auto_locate, parent=None):
@@ -130,7 +131,29 @@ class WeatherWorker(QThread):
                 self.fail.emit({"message": "天气查询失败：%s" % self._last_error})
                 return
 
-            self.ok.emit(self._build_result(data))
+            result = self._build_result(data)
+
+            # 异步获取 AQI 数据（失败不影响天气显示）
+            city_for_aqi = self.city if self.city else (
+                data.get("district") or data.get("city") or "")
+            if city_for_aqi:
+                try:
+                    aqi_resp = requests.get(
+                        self.AQI_URL % city_for_aqi,
+                        timeout=5,
+                        headers={"User-Agent": "EasyClass/1.0"},
+                    )
+                    if aqi_resp.status_code == 200:
+                        aqi_data = aqi_resp.json()
+                        if aqi_data.get("status") == "ok":
+                            aqi_info = aqi_data.get("data", {})
+                            aqi_val = aqi_info.get("aqi")
+                            if aqi_val is not None:
+                                result["air"] = {"aqi": aqi_val}
+                except Exception:
+                    pass  # AQI 获取失败不影响天气显示
+
+            self.ok.emit(result)
         except Exception as exc:
             self.fail.emit({"message": "网络异常: %s" % type(exc).__name__})
 
