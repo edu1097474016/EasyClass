@@ -350,15 +350,9 @@ class AdminWindow(QMainWindow):
         cache = self.weather.cache
         if cache:
             parts = ["%s  %s°C" % (cache.get("city", "未知"), cache.get("temp", "--"))]
-            air = cache.get("air")
-            if air and air.get("aqi") not in (None, "--"):
-                parts.append("AQI %s" % air.get("aqi"))
             if cache.get("warnings"):
                 parts.append("预警 %d 条" % len(cache["warnings"]))
             return "  ".join(parts)
-        key = self.config.get("weather_api_key", "")
-        if not key or "请填写" in key or "你的API密钥" in key:
-            return "未配置"
         return "待刷新"
 
     def _on_weather_update(self):
@@ -918,34 +912,20 @@ class AdminWindow(QMainWindow):
     def _build_weather_page(self, layout):
         self._header(layout, "设置 / 天气", "天气设置")
 
-        cl = self._card(layout, "和风天气")
+        cl = self._card(layout, "天气设置")
 
         self.auto_locate_switch = ToggleSwitch()
         self.auto_locate_switch.set_checked_animated(
             bool(self.config.get("auto_locate", True)))
         self.auto_locate_switch.toggled.connect(self._on_auto_locate_toggled)
         self._row(cl, "自动定位", self.auto_locate_switch,
-                  "开启后通过公网 IP 定位当前电脑所在城市")
+                  "开启后通过公网 IP 自动定位当前电脑所在城市（免费、无需 API Key）")
 
         self.city_edit = QLineEdit()
         self.city_edit.setText(self.config.get("weather_city", "北京"))
-        self.city_edit.setPlaceholderText("输入城市，如：北京")
+        self.city_edit.setPlaceholderText("输入城市，如：上海")
         self.city_edit.setFixedWidth(s(220))
-        self._row(cl, "城市", self.city_edit, "关闭自动定位后可手动填写")
-
-        self.host_edit = QLineEdit()
-        self.host_edit.setText(self.config.get("api_host", "https://api.qweather.com"))
-        self.host_edit.setPlaceholderText("https://你的专属Host")
-        self.host_edit.setFixedWidth(s(320))
-        self._row(cl, "API Host", self.host_edit,
-                  "在控制台-设置中查看你的专属 Host（如 abc.qweatherapi.com）")
-
-        self.key_edit = QLineEdit()
-        self.key_edit.setText(self.config.get("weather_api_key", ""))
-        self.key_edit.setEchoMode(QLineEdit.Password)
-        self.key_edit.setPlaceholderText("请输入和风天气 API Key")
-        self.key_edit.setFixedWidth(s(320))
-        self._row(cl, "API Key", self.key_edit)
+        self._row(cl, "位置", self.city_edit, "关闭自动定位后可手动填写城市")
 
         self.weather_refresh_slider = QSlider(Qt.Horizontal)
         self.weather_refresh_slider.setRange(5, 120)
@@ -996,18 +976,14 @@ class AdminWindow(QMainWindow):
 
     def _save_weather(self):
         self.config["weather_city"] = self.city_edit.text().strip() or "北京"
-        self.config["weather_api_key"] = self.key_edit.text().strip()
-        host = self.host_edit.text().strip()
-        self.config["api_host"] = host or "https://api.qweather.com"
         self.config["auto_locate"] = self.auto_locate_switch.isChecked()
         self.config["weather_refresh_minutes"] = self.weather_refresh_slider.value()
-        self.config.pop("weather_coords", None)
         utils.save_config(self.config)
         self.weather.update_config(self.config)
         self._refresh_dashboard()
-        logger.info("天气设置已保存: 城市=%s 自动定位=%s host=%s 刷新=%d分钟",
+        logger.info("天气设置已保存: 城市=%s 自动定位=%s 刷新=%d分钟",
                     self.config.get("weather_city"), self.config.get("auto_locate"),
-                    self.config.get("api_host"), self.config.get("weather_refresh_minutes"))
+                    self.config.get("weather_refresh_minutes"))
         show_toast("天气设置已保存")
 
     def _update_weather_status(self):
@@ -1022,26 +998,15 @@ class AdminWindow(QMainWindow):
                 cache.get("text", "未知"),
                 cache.get("temp", "--"),
                 cache.get("feels_like", "--")))
-            air = cache.get("air")
-            if air and air.get("aqi") not in (None, "--"):
-                lines.append("空气质量 AQI %s · %s%s" % (
-                    air.get("aqi"), air.get("category", ""),
-                    "（首要污染物：%s）" % air["primary"] if air.get("primary") else ""))
-            lines.append("湿度 %s%% · 风向 %s %s级 · 气压 %shPa" % (
+            lines.append("湿度 %s%% · 风向 %s %s级" % (
                 cache.get("humidity", "--"), cache.get("wind_dir", "--"),
-                cache.get("wind_scale", "--"), cache.get("pressure", "--")))
-            lines.append("更新时间：%s" % cache.get("time", "--"))
-            indices = cache.get("indices") or []
-            if indices:
-                parts = []
-                for i in indices[:5]:
-                    cat = i.get("category") or i.get("level") or ""
-                    parts.append("%s%s" % (i.get("name", ""), cat))
-                lines.append("生活指数：" + " · ".join(parts))
+                cache.get("wind_scale", "--")))
+            lines.append("更新时间：%s" % (cache.get("report_time") or cache.get("time", "--")))
             warnings = cache.get("warnings") or []
             if warnings:
                 for w in warnings[:2]:
-                    lines.append("预警[%s] %s" % (w.get("level", ""), w.get("title", "")))
+                    who = w.get("location") or cache.get("city", "")
+                    lines.append("%s发布%s" % (who, w.get("title", "天气预警")))
             else:
                 lines.append("当前无天气预警")
             self._weather_status.setText("\n".join(lines))
@@ -1049,11 +1014,7 @@ class AdminWindow(QMainWindow):
             if self._weather_error:
                 self._weather_status.setText("天气获取失败：%s" % self._weather_error)
                 return
-            key = self.config.get("weather_api_key", "")
-            if not key or "请填写" in key or "你的API密钥" in key:
-                self._weather_status.setText("未配置 API Key，请在上方填写")
-            else:
-                self._weather_status.setText("等待刷新，请点击下方按钮或稍候自动刷新")
+            self._weather_status.setText("等待刷新，请点击下方按钮或稍候自动刷新")
 
     # ==================================================================
     #  页面 5：课程表
@@ -1202,9 +1163,9 @@ class AdminWindow(QMainWindow):
         for title, text in (
             ("功能特性",
              "灵动岛信息栏 / 深色浅色主题 / 可自定义主题色 / 课程表编辑 / "
-             "和风天气自动刷新 / 系统托盘 / 多显示器自适应 / 鼠标穿透"),
+             "免费天气自动刷新 / 系统托盘 / 多显示器自适应 / 鼠标穿透"),
             ("技术栈", "Python 3.9+ / PySide6 6.5+ / requests"),
-            ("数据来源", "和风天气 QWeather（dev.qweather.com）/ Hitokoto一言 (hitokoto.cn)免费公开api"),
+            ("数据来源", "UApiPro (uapis.cn) 免费天气接口 / Hitokoto一言 (hitokoto.cn)免费公开api"),
             ("图标来源", "悠哉日常大王 / 第一季"),
             ("开源许可", "MIT License"),
             ("作者", "环戊二烯基 (github.com/edu1097474016)"),

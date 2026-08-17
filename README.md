@@ -18,8 +18,8 @@
 - **深色 / 浅色主题**：两套 QSS 一键切换（`ThemeManager` 动态加载，无需重启），支持自定义主题色
 - **灵动岛材质与形状**：毛玻璃 / 亚克力两种材质一键切换，可自定义玻璃底色；外形支持矩形与胶囊（两端圆角）
 - **智能课程判断**：正在上课 / 下课休息 / 下节课提前 10 分钟预告 / 周末无课(**我也想这样啊ε＝ε＝ε＝(#>д<)ﾉ**)
-- **天气看板**：和风天气 API，30 分钟自动刷新；支持公网 IP 自动定位(包准的) / 手动填城市。同一城市两种方式统一使用内置城市表（城市中心坐标 + LocationID）查询，天气保持一致且更准；未收录城市可通过**weather_manager.py**的**CITY_LOCATIONS**表自行扩充
-- **丰富天气数据**：实时天气 + 空气质量 AQI（等级着色）+ 天气预警（按预警等级颜色区分、优先展示）+ 7 天预报 + 24 小时 + 分钟级降水 + 生活指数，矢量图标显示在温度左侧
+- **天气看板**：UApiPro 免费天气接口（uapis.cn，无需 API Key），刷新频率可调；支持公网 IP 自动定位(包准的) / 手动填城市
+- **丰富天气数据**：实时天气 + 天气预警（按预警等级颜色区分、优先展示），矢量图标显示在温度左侧
 - **天气刷新一键 Toast 提示**：托盘菜单与管理后台任一「刷新天气」按钮，点击后均以 Toast 提示刷新结果（成功显示城市/温度/天气，失败显示原因）
 - **数据目录**：启动时自动创建 `data/` 目录，配置、课程表、天气缓存、日志与自定义字体统一写入该目录
 - **系统托盘**：左键显隐，右键菜单（主题 / 透明度 / 显示器 / 全屏 / 穿透 / 刷新天气…）
@@ -28,6 +28,7 @@
 - **课程表导入**：管理后台支持导入 JSON 课表，自动校验与提示
 - **首次使用引导**：首次启动弹窗提示完成天气与课程表配置，并自动打开管理后台
 - **靠近自动隐藏**：鼠标靠近灵动岛时自动隐藏、移开后恢复（默认开启，可在管理后台关闭）
+- **震惊**:ctrl+c可以做到优雅退出程序(大多用不到)
 
 ## 🚀 安装与运行
 
@@ -39,39 +40,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-首次运行会自动生成 `data/config.json`（从模板复制）。请在 `data/config.json` 中填写和风天气 API Key，或直接在管理后台「天气」页填写：
-
-```json
-{ "weather_api_key": "你的KEY", "weather_city": "北京" }
-```
-
-免费 Key 申请地址：https://dev.qweather.com/
-
->**注意**：和风天气API只有部分服务是免费的，其他服务可能会要钱，但是基础功能可用，建议先了解下
-
-## ☑LocationID获取以及填写指南
-
-`获取`：
-- **方法 1**：
-登录 和风天气控制台
-进入 **"数据管理"** → **"城市列表"**
-搜索城市获取 **LocationID**
-
-- **方法 2**：和风天气开发文档
-访问 和风天气城市列表
-
-`填写`：
-
-```python
-"城市名": {"id": "LocationID", "lat": "纬度", "lon": "经度"},
-```
-
-| 字段 | 类型 | 说明 | 示例 |
-|------|------|------|------|
-| 城市名 | 字符串 | 城市中文名称 | "北京" |
-| id | 字符串 | 和风天气 LocationID | "101010100" |
-| lat | 字符串 | 纬度（小数） | "39.90" |
-| lon | 字符串 | 经度（小数） | "116.41" |
+首次运行会自动生成 `data/config.json`（从模板复制）。天气使用免费接口，无需 API Key：可在管理后台「天气」页开启自动定位，或关闭后手动填写城市，并调整刷新频率。
 
 ## ☆打包为独立 exe
 
@@ -100,13 +69,12 @@ pyinstaller EasyClass.spec
 {
   "app_name": "易课",
   "app_version": "1.0.0",
-  "weather_api_key": "请填写你的API密钥",
   "weather_city": "北京",
-  "api_host": "https://api.qweather.com",
   "auto_locate": true,
+  "weather_refresh_minutes": 30,
   "opacity": 0.65,
   "password": "admin123",
-  "api_provider": "hefeng",
+  "api_provider": "uapi",
   "island_width_ratio": 1.0,
   "island_glass_style": "auto",
   "island_glass_custom": "#1E202D",
@@ -127,7 +95,9 @@ pyinstaller EasyClass.spec
 }
 ```
 
-> **注意**：和风天气新版 API 要求每个账号使用专属 API Host（在[控制台-设置](https://console.qweather.com/setting)查看，形如 `https://abc.qweatherapi.com`）。若请求返回 `Invalid Host`，请在管理后台「天气」页填写你的专属 Host。
+> **注意**：天气数据来自 UApiPro 免费接口（uapis.cn），无需 API Key；自动定位走公网 IP，手动填城市时接口按城市名查询。
+
+>例如https://uapis.cn/api/v1/misc/weather?city=上海---为手动，https://uapis.cn/api/v1/misc/weather---为自动定位
 
 `schedule.json`：一周课程表数据；`weather_cache.json`：历史天气缓存文件（新版天气数据改为内存缓存，该文件为兼容遗留）。
 
@@ -139,7 +109,7 @@ EasyClass/
 ├── theme_manager.py         # 主题管理模块（QSS 变量替换 / 主题持久化 / 自定义主题色）
 ├── island_window.py         # 灵动岛主窗口（天气/预警/AQI/每日一言/鼠标靠近自动隐藏）
 ├── course_manager.py        # 课程表数据管理
-├── weather_manager.py       # 天气管理（IP 定位 + 实时/空气/预警/预报 + 内置城市表 + QThread）
+├── weather_manager.py       # 天气管理（UApiPro 免费接口 + 自动定位/手动城市 + QThread）
 ├── hitokoto.py              # 每日一言（Hitokoto）
 ├── icon_drawer.py           # 矢量图标绘制（托盘 / 天气）
 ├── tray_icon.py             # 系统托盘

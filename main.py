@@ -15,6 +15,7 @@
 # ==========================================================================
 
 import sys
+import signal
 import logging
 import logging.handlers
 import os
@@ -81,6 +82,15 @@ def main():
     utils.install_button_press_animation(app)   # 按钮按下滑动动画
     logging.info("QApplication 初始化完成")
 
+    # Ctrl+C 优雅退出：把 SIGINT 转成正常的 app.quit()，
+    # 让主事件循环正常退出并触发 aboutToQuit 清理（天气线程停止、托盘销毁等）
+    def _on_sigint(_signum, _frame):
+        qapp = QApplication.instance()
+        if qapp is not None:
+            qapp.quit()
+
+    signal.signal(signal.SIGINT, _on_sigint)
+
     # 应用已导入的自定义字体（永久保存在 data/fonts/）
     font_ok = utils.apply_saved_font(config.get("custom_font_file", ""))
     logging.info("自定义字体应用: %s 文件=%s", font_ok, config.get("custom_font_file", "无"))
@@ -102,7 +112,8 @@ def main():
 
     # ---------- 7. 天气管理 ----------
     weather = WeatherManager(config)
-    logging.info("天气管理器初始化: 提供商=%s host=%s", "hefeng", config.get("api_host"))
+    logging.info("天气管理器初始化: 提供商=uapi 城市=%s 自动定位=%s",
+                 config.get("weather_city"), config.get("auto_locate"))
 
     # ---------- 8. 灵动岛主窗口（默认隐藏） ----------
     island = IslandWindow(theme, courses, weather, config)
@@ -164,9 +175,9 @@ def main():
         QMessageBox.information(
             None, "欢迎使用 易课 EasyClass awa",
             "首次使用，请先完成基础设置：\n\n"
-            "1. 天气：在「设置 → 天气」中填入和风天气 API Key\n"
+            "1. 天气：在「设置 → 天气」中开启自动定位，或手动填写城市\n"
             "2. 课程表：在「设置 → 课程表」中编辑或导入课表\n\n"
-            "完成后灵动岛会自动显示课程、倒计时、天气与预警。",
+            "完成后灵动岛会自动显示课程、倒计时、天气与预警（天气接口免费，无需 API Key）。",
             QMessageBox.Ok)
         open_settings()
 

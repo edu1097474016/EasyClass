@@ -208,7 +208,7 @@ class TrayIcon(QSystemTrayIcon):
             None, "关于 易课",
             "<b>%s</b> v%s<br><br>"
             "Silicon UI · 全面自适应灵动岛教室看板<br>"
-            "天气数据来源：和风天气 (dev.qweather.com)<br>"
+            "天气数据来源：UApiPro 免费天气接口 (uapis.cn)<br>"
             "名言数据来源：Hitokoto一言 (hitokoto.cn)<br><br>"
             "易课 EasyClass v1.0.0 | Silicon UI" % (APP_NAME, APP_VERSION))
 
