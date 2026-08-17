@@ -39,7 +39,7 @@
 QWidget {
     background: transparent;
     color: var(--text-main);
-    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
+    font-family: var(--font-family);
 }
 QWidget#mainWindow {
     background-color: var(--bg-main);
@@ -71,8 +71,8 @@ QFrame#maskCard {
 /* 灵动岛背景 */
 QFrame#islandBackground {
     background-color: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: 22px;
+    border: none;
+    border-radius: 0px;
 }
 
 /* 分隔线 */

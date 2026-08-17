@@ -762,6 +762,15 @@ class WeatherDisplay(QWidget):
         fm = QFontMetricsF(font)
         text_x = x + icon_size + s(6)
 
+        # 根据 AQI 确定文字颜色
+        aqi_val = None
+        if self._air:
+            try:
+                aqi_val = int(self._air.get("aqi"))
+            except (TypeError, ValueError):
+                aqi_val = None
+        aqi_c = aqi_color(aqi_val) if aqi_val is not None else None
+
         if self._text and not self._error:
             painter.setPen(QColor(colors["text_secondary"]))
             painter.drawText(
@@ -780,7 +789,13 @@ class WeatherDisplay(QWidget):
             rect = QRectF(x0, (self.height() - fm.height()) / 2,
                           self.width() - x0, fm.height())
         else:
-            painter.setPen(QColor(colors["text_main"]))
+            # 温度文字：AQI 可用时跟随 AQI 等级颜色，否则用主题色
+            if aqi_c:
+                pen = QColor(aqi_c)
+                pen.setAlpha(200)
+                painter.setPen(pen)
+            else:
+                painter.setPen(QColor(colors["text_main"]))
             text = self._temp
         painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)
 
@@ -849,6 +864,13 @@ class IslandWindow(QWidget):
         self._text_mode = config.get("text_mode", "scroll") or "scroll"
         if self._text_mode not in ("elide", "scroll"):
             self._text_mode = "scroll"
+
+        # 位置偏移（用户手动调整后的增量，像素）
+        self._pos_x_offset = int(config.get("island_pos_x_offset", 0))
+        self._pos_y_offset = int(config.get("island_pos_y_offset", 0))
+        # 拖拽模式标记（由管理后台触发）
+        self._drag_mode = False
+        self._drag_start = None
 
         # ---- 窗口配置：置顶 / 无边框 / 不抢焦点 / 透明背景 ----
         # Linux 兼容：使用 Qt.Window 替代 Qt.Tool
@@ -1289,6 +1311,7 @@ class IslandWindow(QWidget):
         """
         计算灵动岛几何位置。
         Linux 修复：使用 geometry() 获取完整屏幕区域，正确处理顶部坐标。
+        支持用户手动调整的位置偏移（_pos_x_offset, _pos_y_offset）。
         """
         screen = self.current_screen()
         if screen is None:
@@ -1318,6 +1341,10 @@ class IslandWindow(QWidget):
             # 确保 y 不为负数（Wayland 兼容）
             if y < 0:
                 y = 0
+
+        # 应用手动调整的位置偏移
+        x += self._pos_x_offset
+        y += self._pos_y_offset
 
         logger.debug(f"Island geometry: x={x}, y={y}, width={width}, height={height}")
         return QRect(x, y, width, height)
@@ -1696,8 +1723,10 @@ class IslandWindow(QWidget):
             self.show()
             self.raise_()
             return
-        target = self.pos()
-        # Linux 下减少偏移量，避免被窗口管理器强制拉回
+        # 从 calculate_island_geometry() 获取正确的目标位置，
+        # 而非依赖 self.pos()（Linux 下窗口管理器可能会覆盖位置）
+        geom = self.calculate_island_geometry()
+        target = QPoint(geom.x(), geom.y())
         if IS_LINUX:
             start = QPoint(target.x(), target.y() - s(10))
         else:
@@ -1707,6 +1736,10 @@ class IslandWindow(QWidget):
         self.setWindowOpacity(self._opacity)
         self.show()
         self.raise_()
+        # Linux 下窗口管理器可能在 show() 后重新定位窗口，
+        # 用 QTimer.singleShot 强制恢复到正确位置
+        if IS_LINUX:
+            QTimer.singleShot(0, lambda: self.move(target))
         self._sliding = True
         anim = QPropertyAnimation(self, b"pos", self)
         anim.setDuration(300)
@@ -1722,9 +1755,9 @@ class IslandWindow(QWidget):
         if screen is None:
             self.hide()
             return
-        # Linux 下减少偏移量
+        geom = self.calculate_island_geometry()
         if IS_LINUX:
-            end = QPoint(self.x(), self.y() - s(10))
+            end = QPoint(self.x(), geom.y() - s(10))
         else:
             end = QPoint(self.x(), self.y() - self.height() - s(2))
 
@@ -1799,6 +1832,59 @@ class IslandWindow(QWidget):
 
     def is_pass_through(self):
         return self._pass_through
+
+    # ------------------------------------------------------------------
+    #  位置偏移 & 拖拽模式
+    # ------------------------------------------------------------------
+    def set_position_offset(self, x_offset, y_offset):
+        """设置位置偏移量并立即生效。"""
+        self._pos_x_offset = int(x_offset)
+        self._pos_y_offset = int(y_offset)
+        if self.isVisible():
+            self.apply_geometry()
+
+    def position_offset(self):
+        """返回当前 (x_offset, y_offset)。"""
+        return (self._pos_x_offset, self._pos_y_offset)
+
+    def enter_drag_mode(self):
+        """进入拖拽模式：允许鼠标拖动灵动岛。"""
+        self._drag_mode = True
+        self._drag_start = None
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        for widget in self.findChildren(QWidget):
+            widget.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+
+    def exit_drag_mode(self):
+        """退出拖拽模式：恢复正常状态。"""
+        self._drag_mode = False
+        self._drag_start = None
+        if self._pass_through:
+            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            for widget in self.findChildren(QWidget):
+                widget.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+    def mousePressEvent(self, event):
+        if self._drag_mode and event.button() == Qt.LeftButton:
+            self._drag_start = event.globalPosition().toPoint() - self.pos()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_mode and self._drag_start is not None:
+            new_pos = event.globalPosition().toPoint() - self._drag_start
+            self.move(new_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._drag_mode and event.button() == Qt.LeftButton:
+            self._drag_start = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def _apply_click_through_windows(self):
         """Windows 窗口级鼠标穿透。"""

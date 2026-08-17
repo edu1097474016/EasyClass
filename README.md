@@ -6,7 +6,7 @@
   </p>
 </div>
 
-> 基于 **Python + PySide6** 的 Windows 桌面灵动岛（Dynamic Island）教室信息看板。
+> 基于 **Python + PySide6** 的 Windows / Linux 桌面灵动岛（Dynamic Island）教室信息看板。
 
 >AI Slop 
 
@@ -19,12 +19,13 @@
 - **灵动岛材质与形状**：毛玻璃 / 亚克力两种材质一键切换，可自定义玻璃底色；外形支持矩形与胶囊（两端圆角）
 - **智能课程判断**：正在上课 / 下课休息 / 下节课提前 10 分钟预告 / 周末无课(**我也想这样啊ε＝ε＝ε＝(#>д<)ﾉ**)
 - **天气看板**：UApiPro 免费天气接口（uapis.cn，无需 API Key），刷新频率可调；支持公网 IP 自动定位(包准的) / 手动填城市
-- **丰富天气数据**：实时天气 + 天气预警（按预警等级颜色区分、优先展示），矢量图标显示在温度左侧
+- **丰富天气数据**：实时天气 + 天气预警（按预警等级颜色区分、优先展示），矢量图标显示在温度左侧；AQI 空气质量自动变色（绿/黄/橙/红/深红）
 - **天气刷新一键 Toast 提示**：托盘菜单与管理后台任一「刷新天气」按钮，点击后均以 Toast 提示刷新结果（成功显示城市/温度/天气，失败显示原因）
 - **数据目录**：启动时自动创建 `data/` 目录，配置、课程表、天气缓存、日志与自定义字体统一写入该目录
 - **系统托盘**：左键显隐，右键菜单（主题 / 透明度 / 显示器 / 全屏 / 穿透 / 刷新天气…）
 - **开机自启动**：管理后台一键开关，写入注册表 HKCU Run(默认关闭，需在设置中开启)
-- **自定义字体**：导入 TTF/OTF 字体并永久保存到 `data/fonts/`，实时生效
+- **自定义字体**：导入 TTF/OTF 字体并永久保存到 `data/fonts/`，实时生效；Linux 下自动适配 Noto Sans CJK SC 等系统字体
+- **灵动岛位置调整**：支持手动拖动定位、X/Y 偏移微调，位置永久保存
 - **课程表导入**：管理后台支持导入 JSON 课表，自动校验与提示
 - **首次使用引导**：首次启动弹窗提示完成天气与课程表配置，并自动打开管理后台
 - **靠近自动隐藏**：鼠标靠近灵动岛时自动隐藏、移开后恢复（默认开启，可在管理后台关闭）
@@ -83,6 +84,8 @@ pyinstaller EasyClass.spec
   "island_fullscreen": false,
   "island_passthrough": false,
   "island_screen": 0,
+  "island_pos_x_offset": 0,
+  "island_pos_y_offset": 0,
   "hover_hide": true,
   "hover_hide_margin": 60,
   "hover_hide_interval": 100,
@@ -107,7 +110,7 @@ pyinstaller EasyClass.spec
 EasyClass/
 ├── main.py                  # 程序入口
 ├── theme_manager.py         # 主题管理模块（QSS 变量替换 / 主题持久化 / 自定义主题色）
-├── island_window.py         # 灵动岛主窗口（天气/预警/AQI/每日一言/鼠标靠近自动隐藏）
+├── island_window.py         # 灵动岛主窗口（天气/预警/AQI/每日一言/鼠标靠近自动隐藏/位置调整）
 ├── course_manager.py        # 课程表数据管理
 ├── weather_manager.py       # 天气管理（UApiPro 免费接口 + 自动定位/手动城市 + QThread）
 ├── hitokoto.py              # 每日一言（Hitokoto）

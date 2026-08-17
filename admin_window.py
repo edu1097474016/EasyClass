@@ -697,6 +697,56 @@ class AdminWindow(QMainWindow):
         hint.setWordWrap(True)
         cl.addWidget(hint)
 
+        cl = self._card(layout, "位置调整")
+        self.pos_x_slider = QSlider(Qt.Horizontal)
+        self.pos_x_slider.setRange(-500, 500)
+        self.pos_x_slider.setValue(int(self.config.get("island_pos_x_offset", 0)))
+        self._pos_x_value = QLabel()
+        self._pos_x_value.setProperty("class", "setting-hint")
+        self.pos_x_slider.valueChanged.connect(self._on_pos_x_changed)
+        self._pos_x_value.setText("%d px" % self.pos_x_slider.value())
+        xrow = QHBoxLayout()
+        xrow.addWidget(QLabel("水平偏移"))
+        xrow.addStretch(1)
+        xrow.addWidget(self._pos_x_value)
+        cl.addLayout(xrow)
+        cl.addWidget(self.pos_x_slider)
+
+        self.pos_y_slider = QSlider(Qt.Horizontal)
+        self.pos_y_slider.setRange(-500, 500)
+        self.pos_y_slider.setValue(int(self.config.get("island_pos_y_offset", 0)))
+        self._pos_y_value = QLabel()
+        self._pos_y_value.setProperty("class", "setting-hint")
+        self.pos_y_slider.valueChanged.connect(self._on_pos_y_changed)
+        self._pos_y_value.setText("%d px" % self.pos_y_slider.value())
+        yrow = QHBoxLayout()
+        yrow.addWidget(QLabel("垂直偏移"))
+        yrow.addStretch(1)
+        yrow.addWidget(self._pos_y_value)
+        cl.addLayout(yrow)
+        cl.addWidget(self.pos_y_slider)
+
+        pos_btns = QHBoxLayout()
+        pos_btns.setSpacing(s(10))
+        self._drag_mode_btn = QPushButton("手动拖动")
+        self._drag_mode_btn.setCheckable(True)
+        self._drag_mode_btn.toggled.connect(self._on_drag_mode_toggled)
+        save_pos_btn = QPushButton("保存位置")
+        save_pos_btn.setProperty("class", "primary")
+        save_pos_btn.clicked.connect(self._save_position)
+        reset_pos_btn = QPushButton("重置位置")
+        reset_pos_btn.clicked.connect(self._reset_position)
+        pos_btns.addWidget(self._drag_mode_btn)
+        pos_btns.addWidget(save_pos_btn)
+        pos_btns.addWidget(reset_pos_btn)
+        pos_btns.addStretch(1)
+        cl.addLayout(pos_btns)
+        hint = QLabel("手动拖动：点击后可直接拖动灵动岛到目标位置；"
+                      "水平/垂直偏移可微调；保存后永久生效。")
+        hint.setProperty("class", "setting-hint")
+        hint.setWordWrap(True)
+        cl.addWidget(hint)
+
         layout.addWidget(self._save_btn(self._save_island))
 
     def _on_width_changed(self, value):
@@ -704,6 +754,72 @@ class AdminWindow(QMainWindow):
         self._width_value.setText("%d%%" % value)
         if self.island is not None:
             self.island.set_width_ratio(value / 100.0)
+
+    def _on_pos_x_changed(self, value):
+        self._pos_x_value.setText("%d px" % value)
+        if self.island is not None:
+            self.island.set_position_offset(value, self.pos_y_slider.value())
+
+    def _on_pos_y_changed(self, value):
+        self._pos_y_value.setText("%d px" % value)
+        if self.island is not None:
+            self.island.set_position_offset(self.pos_x_slider.value(), value)
+
+    def _on_drag_mode_toggled(self, checked):
+        if self.island is None:
+            return
+        if checked:
+            self.island.enter_drag_mode()
+            show_toast("拖动模式已开启，在灵动岛上按住鼠标拖动即可调整位置")
+        else:
+            self.island.exit_drag_mode()
+            # 退出拖拽时，根据实际位置计算新的偏移量
+            if self.island.isVisible():
+                # 临时清零偏移量，获取无偏移时的基础位置
+                old_dx = self.island._pos_x_offset
+                old_dy = self.island._pos_y_offset
+                self.island._pos_x_offset = 0
+                self.island._pos_y_offset = 0
+                base = self.island.calculate_island_geometry()
+                self.island._pos_x_offset = old_dx
+                self.island._pos_y_offset = old_dy
+                cur = self.island.pos()
+                dx = cur.x() - base.x()
+                dy = cur.y() - base.y()
+                self.pos_x_slider.blockSignals(True)
+                self.pos_x_slider.setValue(dx)
+                self.pos_x_slider.blockSignals(False)
+                self._pos_x_value.setText("%d px" % dx)
+                self.pos_y_slider.blockSignals(True)
+                self.pos_y_slider.setValue(dy)
+                self.pos_y_slider.blockSignals(False)
+                self._pos_y_value.setText("%d px" % dy)
+
+    def _save_position(self):
+        dx = self.pos_x_slider.value()
+        dy = self.pos_y_slider.value()
+        self.config["island_pos_x_offset"] = dx
+        self.config["island_pos_y_offset"] = dy
+        if self.island is not None:
+            self.island.set_position_offset(dx, dy)
+        utils.save_config(self.config)
+        show_toast("灵动岛位置已保存")
+
+    def _reset_position(self):
+        self.pos_x_slider.blockSignals(True)
+        self.pos_x_slider.setValue(0)
+        self.pos_x_slider.blockSignals(False)
+        self._pos_x_value.setText("0 px")
+        self.pos_y_slider.blockSignals(True)
+        self.pos_y_slider.setValue(0)
+        self.pos_y_slider.blockSignals(False)
+        self._pos_y_value.setText("0 px")
+        if self.island is not None:
+            self.island.set_position_offset(0, 0)
+        self.config["island_pos_x_offset"] = 0
+        self.config["island_pos_y_offset"] = 0
+        utils.save_config(self.config)
+        show_toast("灵动岛位置已重置")
 
     def _sync_island_controls(self):
         """把灵动岛实际状态同步到开关控件（可能被托盘菜单改动）。"""
@@ -1256,6 +1372,7 @@ class AdminWindow(QMainWindow):
             "swatch_border": swatch_border,
             "stat_bg": stat_bg,
             "scrollbar": scrollbar,
+            "font_family": utils.font_family_css(),
         }
         self.setStyleSheet(self._STYLE % self._palette)
 
@@ -1279,7 +1396,7 @@ class AdminWindow(QMainWindow):
 QWidget {
     background: transparent;
     color: %(text_main)s;
-    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
+    font-family: %(font_family)s;
     font-size: 13px;
 }
 QMainWindow, QWidget#adminRoot { background: %(content_bg)s; }

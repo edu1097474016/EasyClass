@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, QRectF, QPointF
 from PySide6.QtGui import QPainter, QColor, QPixmap, QFont, QPen, QBrush, QImage, QPainterPath
 
 import os
+from utils import make_font
 
 # 应用图标文件（用户提供，位于项目根目录）
 _APP_ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "favicon.ico")
@@ -104,8 +105,7 @@ class IconDrawer:
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setRenderHint(QPainter.TextAntialiasing)
-        font = QFont("Microsoft YaHei UI", int(size * 0.52))
-        font.setBold(True)
+        font = make_font(size * 0.52, bold=True)
         painter.setFont(font)
         painter.setPen(QColor(color))
         painter.drawText(pixmap.rect(), Qt.AlignCenter, text)
@@ -294,8 +294,7 @@ class IconDrawer:
         """未知天气：云 + 问号。"""
         IconDrawer._paint_cloud(painter, size * 0.78, color)
         painter.setPen(QColor(color))
-        font = QFont("Microsoft YaHei UI", int(size * 0.30))
-        font.setBold(True)
+        font = make_font(size * 0.30, bold=True)
         painter.setFont(font)
         painter.drawText(
             QRectF(size * 0.18, size * 0.56, size * 0.64, size * 0.36),

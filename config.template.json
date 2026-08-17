@@ -15,6 +15,8 @@
   "island_fullscreen": false,
   "island_passthrough": false,
   "island_screen": 0,
+  "island_pos_x_offset": 0,
+  "island_pos_y_offset": 0,
   "hover_hide": true,
   "hover_hide_margin": 60,
   "hover_hide_interval": 100,
